@@ -1,0 +1,249 @@
+.TH MINRX 3 "July 2024"
+.SH NAME
+minrx \- A minimal POSIX-compliant matcher for extended regular expressions
+.SH SYNOPSIS
+.ft CW
+.nf
+#include "minrx.h"
+
+int minrx_regcomp(minrx_regex_t *re, const char *regexp, int flags);
+int minrx_regncomp(minrx_regex_t *re, size_t nregexp, const char *regexp,
+                   int flags);
+
+int minrx_regexec(minrx_regex_t *re, const char *string, size_t nrm,
+                  minrx_regmatch_t *rm, int flags);
+int minrx_regnexec(minrx_regex_t *re, size_t nstring, const char *string,
+                   size_t nrm, minrx_regmatch_t *rm, int flags);
+
+size_t minrx_regerror(int errcode, const minrx_regex_t *re,
+                      char *errbuf, size_t errbuflen);
+void minrx_regfree(minrx_regex_t *re);
+.fi
+.ft R
+.SH DESCRIPTION
+.PP
+.I Minrx
+is minimalistic POSIX-compliant regular expression matcher
+for POSIX Extended Regular Expressions (EREs).
+POSIX Basic Regular Expressions (BREs) are not
+supported.
+.PP
+Regular expression use happens in two stages. First you
+.I compile
+the regular expression.  Then, to see if it matches some
+particular text, you
+.I execute
+the compiled expression against the text.
+.SS Compilation
+The compilation functions are:
+.TP
+\f(CWminrx_regcomp()\fP
+Compile the regular expression in the string \f(CWregexp\fP
+and store the compiled form in \f(CWre\fP.
+.TP
+\f(CWminrx_regncomp()\fP
+Compile the regular expression in the string \f(CWregexp\fP
+which is of length \f(CWnregexp\fP
+and store the compiled form in \f(CWre\fP.
+In this version, \f(CWregexp\fP is not necessarily zero-terminated.
+This function is an extension over POSIX.
+.PP
+The various compilation flags for \f(CWflags\fP
+should be bitwise-OR'ed together. They are:
+.RS
+.TP
+\f(CWMINRX_REG_EXTENDED\fP
+Required in current version of
+.IR minrx .
+.TP
+\f(CWMINRX_REG_ICASE\fP
+Ignore case in pattern and search.
+.TP
+\f(CWMINRX_REG_NEWLINE\fP
+Exclude \f(CW\en\fP from \f(CW.\fP
+and \f(CW[^...]\fP
+and treat as boundary for \f(CW^\fP and \f(CW$\fP.
+.TP
+\f(CWMINRX_REG_NOSUB\fP
+Yes/no result only; no \f(CWregmatch_t\fP substrings results.
+.TP
+\f(CWMINRX_REG_BRACE_COMPAT\fP
+Left brace begins an interval expression only when followed by a digit.
+.TP
+\f(CWMINRX_REG_BRACK_ESCAPE\fP
+Allow backslash escapes in bracket \f(CW[...]\fP expressions.
+.TP
+\f(CWMINRX_REG_EXTENSIONS_BSD\fP
+Enable BSD extensions \f(CW\e<\fP and \f(CW\e>\fP.
+.TP
+\f(CWMINRX_REG_EXTENSIONS_GNU\fP
+Enable GNU extensions \f(CW\eb \eB \es \eS \ew \eW\fP.
+.RE
+.PP
+The following values may be returned from
+\f(CWminrx_regcomp()\fP
+and
+\f(CWminrx_regncomp()\fP:
+.RS
+.TP
+\f(CWMINRX_REG_SUCCESS\fP
+Compiled successfully.
+.TP
+\f(CWMINRX_REG_BADPAT\fP
+Bad pattern.
+.TP
+\f(CWMINRX_REG_BADBR\fP
+Invalid contents of \f(CW{}\fP.
+.TP
+\f(CWMINRX_REG_BADRPT\fP
+\f(CW? * +\fP or \f(CW{interval}\fP not preceded by valid subpattern.
+.TP
+\f(CWMINRX_REG_EBRACE\fP
+Unbalanced \f(CW{\fP.
+.TP
+\f(CWMINRX_REG_EBRACK\fP
+Unbalanced \f(CW[\fP.
+.TP
+\f(CWMINRX_REG_EPAREN\fP
+Unbalanced \f(CW(\fP.
+.TP
+\f(CWMINRX_REG_EESCAPE\fP
+Invalid backslash.
+.TP
+\f(CWMINRX_REG_ECOLLATE\fP
+Invalid collating element.
+.TP
+\f(CWMINRX_REG_ECTYPE\fP
+Invalid character class name.
+.TP
+\f(CWMINRX_REG_ERANGE\fP
+Invalid range endpoint.
+.TP
+\f(CWMINRX_REG_ESUBREG\fP
+Invalid \edigit.
+.TP
+\f(CWMINRX_REG_ESPACE\fP
+Memory allocation failed.
+.TP
+\f(CWMINRX_REG_UNKNOWN\fP
+Unknown error code. (This shouldn't happen.)
+.RE
+.SS Execution
+The executions functions are:
+.TP
+\f(CWminrx_regexec()\fP
+Execute the compiled regular expression \f(CWre\fP against the text in \f(CWstring\fP.
+The use of \f(CWrm\fP for submatches is explained below.
+.TP
+\f(CWminrx_regnexec()\fP
+Execute the compiled regular expression \f(CWre\fP against the text
+in \f(CWstring\fP of length \f(CWnstring\fP.
+Here too, in this case, \f(CWstring\fP is not necessarily zero-terminated.
+.PP
+When executing the compiled regular expression, you can pass in the
+bitwise-OR of the following flags:
+.RS
+.TP
+\f(CWMINRX_REG_NOTBOL\fP
+Don't match \f(CW^\fP at beginning of string.
+.TP
+\f(CWMINRX_REG_NOTEOL\fP
+Don't match \f(CW$\fP at end of string.
+.TP
+\f(CWMINRX_REG_RESUME\fP
+This is a Minrx extension: resume search from \f(CWrm[0].rm_eo\fP.
+.RE
+.PP
+The following values may be returned from
+\f(CWminrx_regexec()\fP
+and
+\f(CWminrx_regnexec()\fP:
+.RS
+.TP
+\f(CWMINRX_REG_SUCCESS\fP
+Match found.
+.TP
+\f(CWMINRX_REG_NOMATCH\fP
+Match not found.
+.TP
+\f(CWMINRX_REG_UNKNOWN\fP
+Unknown error code. (This shouldn't happen.)
+.RE
+.SS Subexpression Matching
+.I Minrx
+not only indicates whether text matched or not, it can also return information
+indicating where in the text the regular expression matched. In addition,
+it can return information about
+.IR submatches ;
+that is, text that matched portions of the regular expression enclosed
+in parentheses. This information is returned in an array of
+\f(CWminrx_regmatch_t\fP structures, which look like this:
+.RS
+.nf
+.ft CW
+typedef struct {
+        ptrdiff_t rm_so;
+        ptrdiff_t rm_eo;
+} minrx_regmatch_t;
+.ft R
+.fi
+.RE
+.PP
+After compiling the regular expression the \f(CWminrx_regex_t\fP struct will
+contain a member named \f(CWre_nsub\fP which indicates how many possible submatches
+there are. This will be one plus the number of parenthesized subexpressions.
+You should therefore allocate an array of these structures of this size to pass
+to \f(CWminrx_regexec()\fP or \f(CWminrx_regnexec()\fP.
+Upon return, \f(CWrm[0]\fP will have the starting and ending offsets of
+the text that matched the entire regular expression, and \f(CWrm[1]\fP will
+have the offsets for the first subexpression, \f(CWrm[2]\fP
+the offsets for the second subexpression, and so on.
+Note that \f(CWrm_eo\fP will be one past the last character of the matching
+text, due to C's zero-based array indexing.
+.SS Error Messages
+The error codes described earlier may be translated into printable
+strings (say, for error messages) using the \f(CWminrx_regerror()\fP
+function.  It returns the number of bytes needed to hold the error
+string. If the buffer passed in is large enough, the message is placed
+there. Otherwise, you should allocate a buffer that is large enough
+and call it again.
+.SS Releasing Storage
+If a compiled regular expression is no longer needed, you should release
+its storage using \f(CWminrx_regfree()\fP.
+.SH "SEE ALSO"
+.IR regex (3)
+.SH AUTHOR
+Michael J. Haertel, \f(CWmike@ducky.net\fP.
+.PP
+This manual page was written by Arnold Robbins, \f(CWarnold@skeeve.com\fP.
+.SH COPYRIGHT FOR THIS MANUAL PAGE
+Copyright 2024 Arnold David Robbins
+.PP
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+.PP
+.RS
+1.  Redistributions of source code must retain the above copyright notice,
+this list of conditions and the following disclaimer.
+.PP
+2.  Redistributions in binary form must reproduce the above copyright notice,
+this list of conditions and the following disclaimer in the documentation
+and/or other materials provided with the distribution.
+.PP
+3. Neither the name of the copyright holder nor the names of its contributors
+may be used to endorse or promote products derived from this software
+without specific prior written permission.
+.RE
+.PP
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
