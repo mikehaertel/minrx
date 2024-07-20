@@ -39,7 +39,7 @@ typedef enum {				/* Flags for minrx_reg*comp() */
 	MINRX_REG_BRACE_COMPAT = 16,	/* { begins interval expression only when followed by digit */
 	MINRX_REG_BRACK_ESCAPE = 32,	/* bracket expressions [...] allow backslash escapes */
 	MINRX_REG_EXTENSIONS_BSD = 64,	/* enable BSD extensions \< and \> */
-	MINRX_REG_EXTENSIONS_GNU = 128	/* enable GNU extensions \b \B \s \S \w \W \y */
+	MINRX_REG_EXTENSIONS_GNU = 128	/* enable GNU extensions \b \B \s \S \w \W */
 } minrx_regcomp_flags_t;
 
 typedef enum {				/* Flags for minrx_reg*exec() */
