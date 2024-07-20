@@ -1,6 +1,5 @@
 2024-07-20         Arnold D. Robbins     <arnold@skeeve.com>
 
 	* minrx.h: Remove \y from list of GNU extensions.
-	* README.md: Small edit.
 	* minrx.3: New file.
 	* ChangeLog: New file.
