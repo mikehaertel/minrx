@@ -23,7 +23,7 @@ void minrx_regfree(minrx_regex_t *re);
 .SH DESCRIPTION
 .PP
 .I Minrx
-is minimalistic POSIX-compliant regular expression matcher
+is a minimalistic POSIX-compliant regular expression matcher
 for POSIX Extended Regular Expressions (EREs).
 POSIX Basic Regular Expressions (BREs) are not
 supported.
@@ -108,7 +108,7 @@ Unbalanced \f(CW[\fP.
 Unbalanced \f(CW(\fP.
 .TP
 \f(CWMINRX_REG_EESCAPE\fP
-Invalid backslash.
+Invalid backslash escape.
 .TP
 \f(CWMINRX_REG_ECOLLATE\fP
 Invalid collating element.
@@ -129,7 +129,7 @@ Memory allocation failed.
 Unknown error code. (This shouldn't happen.)
 .RE
 .SS Execution
-The executions functions are:
+The execution functions are:
 .TP
 \f(CWminrx_regexec()\fP
 Execute the compiled regular expression \f(CWre\fP against the text in \f(CWstring\fP.
@@ -151,7 +151,8 @@ Don't match \f(CW^\fP at beginning of string.
 Don't match \f(CW$\fP at end of string.
 .TP
 \f(CWMINRX_REG_RESUME\fP
-This is a Minrx extension: resume search from \f(CWrm[0].rm_eo\fP.
+Resume search from \f(CWrm[0].rm_eo\fP.
+This is a Minrx extension.
 .RE
 .PP
 The following values may be returned from
