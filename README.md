@@ -115,8 +115,10 @@ their contributions can be relicensed under BSD or LGPL-v2.1 licenses.
 The text of the GNU GPL licenses is included in the files [COPYING](COPYING)
 and [COPYING.LESSER](COPYING.LESSER).
 
-## Acknowledgements
+The manual page `minrx.3` (contributed by Arnold Robbins) is
+under its own license, the text of which can be found in that file.
 
+## Acknowledgements
 
 Arnold Robbins pestered me for years to write this matcher, and enthusiastically
 tested numerous early versions of it with Gawk.

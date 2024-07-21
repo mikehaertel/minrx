@@ -20,39 +20,13 @@ size_t minrx_regerror(int errcode, const minrx_regex_t *re,
 void minrx_regfree(minrx_regex_t *re);
 .fi
 .ft R
-.ig
-.SH POSIX SYNOPSIS
-.ft CW
-.nf
-#include "regex.h"
-
-int regcomp(regex_t *re, const char * regexp, int flags);
-int regncomp(regex_t *re, size_t nregexp, const char *regexp, int flags);
-
-int regexec(regex_t *re, const char *string, size_t nrm, regmatch_t *rm,
-            int flags);
-int regnexec(regex_t *re, size_t nstring, const char *string, size_t nrm,
-             regmatch_t *rm, int flags);
-
-size_t regerror(int errcode, const regex_t *re, char *errbuf,
-                size_t errbuflen);
-void regfree(regex_t *re);
-.fi
-.ft R
-..
 .SH DESCRIPTION
 .PP
 .I Minrx
 is a minimalistic POSIX-compliant regular expression matcher
 for POSIX Extended Regular Expressions (EREs).
 POSIX Basic Regular Expressions (BREs) are not
-.\" currently
 supported.
-.ig
-.PP
-By including \f(CW<regex.h>\fP, you can use the
-POSIX standard interfaces in your code.
-..
 .PP
 Regular expression use happens in two stages. First you
 .I compile
