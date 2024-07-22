@@ -5,35 +5,50 @@ Expressions (EREs).  I call this enhanced automaton a Structured NFA,
 abbreviated SNFA.  It could also possibly be called a Stacked NFA with
 the same abbreviation.
 
-As is conventional, the SNFA includes both nodes that consume and match
-input characters (from the string being searched), as well as nodes,
-called epsilon-matching nodes, that "match the empty string" and do not
-consume input characters.
+Here is some background material for readers not already familiar with
+conventional NFA-based regular expression matchers:
 
-As is also conventional, the matching algorithm maintains a set of
-"threads" exploring all possible paths through the SNFA in parallel.
-The matcher performs a breadth-first search of paths through the SNFA,
-advancing all threads one input character at a time.
+https://en.wikipedia.org/wiki/Thompson%27s_construction
+https://en.wikipedia.org/wiki/Nondeterministic_finite_automaton
 
-The matcher is initialized by introducing a single thread associated
+The rest of this description is concerned with first briefly describing
+the conventional aspects of MinRX's algorithm, followed by a more detailed
+description of the differences between MinRX and the traditional algorithm.
+
+As is conventional, the MinRX SNFA is constructed using Thompson's
+construction (with slight modifications) and includes both nodes that
+consume and match input characters (from the string being searched),
+as well as nodes, called epsilon-matching nodes, that "match the empty
+string" and do not consume input characters.
+
+As is also conventional, the MinRX matcher executes by exploring all
+possible paths through the SNFA in parallel using breadth-first search,
+consuming one input character per iteration.  MinRX creates and maintains
+a collection of "non-deterministic states", called NStates in the MinRX
+source code, that each record information pertaining to a particular
+location in the SNFA and the text that was matched so far in order
+to reach that location.  Each NState represents a match-in-progress.
+
+The matcher is initialized by introducing a single NState associated
 with the initial entry node (a.k.a. start state) of the SNFA.  Then the
 matcher performs an "epsilon closure", exhaustively finding the set of
-all nodes reachable from the start state by traversing outgoing edges of
-only epsilon-matching nodes.  The output of this initial epsilon closure
-is the initial state of the matcher prior to the first input character.
+all nodes reachable from the start state by traversing outgoing edges
+of only epsilon-matching nodes in the SNFA.  The output of this initial
+epsilon closure is a collection of NStates that together comprise the
+state of the matcher prior to consuming the first input character.
 
 After initialization the matcher loops over input characters, performing
 the following operations for each input character:
 
-  * discard all threads at epsilon-matching nodes
+  * discard all NStates at epsilon-matching nodes
 
-  * advance only those remaining threads at character-matching nodes
+  * advance only those remaining NStates at character-matching nodes
     that actually match the current input character
 
-  * introduce a new thread at the start state (in order to explore
+  * introduce a new NState at the start state (in order to explore
     matches at all possible starting offsets in the search string)
 
-  * perform epsilon closure on the set of threads
+  * perform epsilon closure on the set of NStates so far
 
 These steps are repeated until there are no more input characters.
 
@@ -42,89 +57,104 @@ match has been found and the algorithm will prioritize it against any
 other matches that have also been found in order to identify the "best"
 match, according to criteria that will be described later.
 
-One last conventional aspect of this matcher is that every thread records
+Each NState is labeled with the position in the input string at which
+the path leading to the NState was first introduced to the search.
+Whenever two NState reach the same node in the SNFA, only the NState that
+originated earlier in the search string is retained.  This ensures that
+MinRX will find the longest match.  If two NStates with the same starting
+position advance to the same node, additional criteria described later
+determine which will be retained and which discarded.
+
+One last conventional aspect of this matcher is that every NState records
 the starting and ending offsets, within the input string, corresponding
-to parenthesized subexpression groups encountered previously along
-that thread's path through the SNFA.  Each thread is also labeled with
-the position in the input string at which the thread was introduced to
-the search.  Whenever two threads reach the same node in the SNFA, only
-the thread that originated earlier in the search string is retained.
-If two threads with the same starting position reach the same node,
-additional criteria described later determine which will be retained.
+to parenthesized subexpression groups encountered previously along that
+NState's path through the SNFA.  If the NState ultimately leads to a match,
+these recorded starting and ending offsets will become the rm_so/rm_eo
+fields of the matcher's output.
 
 This is all very conventional, so what is different about regular expression
 matching using the SNFA?
 
-  * Each thread traversing the SNFA records a stack of integer values that
-    drive disambiguation of POSIX subpattern matches.  In contrast to the
-    stacked automata of parsing theory, such as LR parsers, the stacks
-    of threads traversing the SNFA are finite and bounded.  The thread
-    stacks exist alongside the remembered starting and ending offsets of
-    parenthesized subexpressions.  Importantly, only the initial starting
-    offset and stack contents are used to determine which threads to
-    retain and which to discard at each node in the SNFA.  The memorialized
-    positions of parenthesized groups do not participate in these decisions.
+  * Each NState traversing the SNFA records a stack of integer values
+    that drive disambiguation of POSIX subpattern matches.  In contrast
+    to the stacked automata of parsing theory, such as LR parsers, the
+    stacks stored in NStates traversing the SNFA are finite and bounded.
+    The NState stacks are held in the same storage as the remembered
+    starting and ending offsets of parenthesized subexpressions, and
+    record additional information about the match.
 
-  * Nodes of the SNFA retain a block structure corresponding to the syntax
-    of the regular expression, with structure-delimiting nodes at the entry
-    and exit points of alternations, closures/repetitions, and parenthesized
-    subexpressions.  Each node of the SNFA has an associated stack depth.
-    Stack entries are pushed when traversing edges from structure-entry nodes
-    to nodes inside the structures, and are popped when traversing edges
-    departing from structure-exiting nodes.
+    Importantly, when comparing two NStates that have reached the same
+    node in order to decide which NState will be retained and which
+    will be discarded, only the NStates' initial starting offsets and
+    their stack contents will be compared.  The recorded starting and
+    ending offsets of parenthesized subexpressions do not participate
+    in the decisions of which NStates to retain or discard!
 
-  * The epsilon-closure algorithm is modified to respect the SNFA's block
-    structure as follows: the epsilon closure of all (node, thread)
-    tuples inside each structured block is exhaustively expanded before
-    any structure-exiting edges are traversed.  This invariant ensures
-    that any thread state exiting a block structured construct at a
+  * The SNFA contains special nodes types recording the syntactic block
+    structure of the original regular expression, with structure-delimiting
+    nodes at the entry- and exit-points of alternations, closures/reptitions,
+    and parenthesized subexpressions.  By contrast, the NFAs in traditional
+    Thompson's construction do not retain this structure.
+
+    Each node of the SNFA is also labeled with its stack depth within the
+    block structure.  Stack entries are pushed when traversing edges from
+    structure-entry nodes to interior nodes inside the structures, and
+    are popped when departing from structure-exit nodes to nodes outside
+    of the block.
+
+  * The epsilon-closure algorithm is modified to respect the SNFA block
+    structure as follows: the epsilon closure of all (node, NState)
+    tuples inside each structured block is exhaustively expanded
+    before any structure-exiting edges are followed.  This invariant
+    ensures that any NState exiting a block-structured construct at a
     particular character boundary has been compared to all other possible
-    competing threads before it "escapes" to downstream/outside nodes.
-    At each input character boundary, only the best solution to any
-    block-structured construct survives to escape from each successively
-    less-nested level of the regular expression's subexpression
-    structure.  This is important because when stack entries are popped
-    at structure-exiting nodes, the stack entries needed to prioritize
-    threads with respect to the constraints of the now-exited structure
-    are lost.
+    competing NStates before it "escapes" to downstream/outside nodes.
+    In other words, at each input character boundary, only the "best
+    match" to any block-structured construct survives to escape from
+    each successively less-nested level of the regular expression's
+    subexpression structure.  This is important because when stack
+    entries are popped at structure-exiting nodes, the stack entries
+    needed to prioritize NStates with respect to the constraints of the
+    now-exited structure will be lost.
 
     There are a variety of ways that this ordering constraint on epsilon
-    closure evaluation can be implemented.  In MinRX it is enforced
+    closure evaluation could be implemented.  In MinRX it is enforced
     by numbering the nodes from left to right according to the lexical
     position in the original regular expression, such that all structure-
-    exiting nodes are higher-numbered than any nodes in the interiors of
-    the structures they are exiting.  Then the queue of states waiting to
-    be examined in the conventional epsilon-closure algorithm is replaced
-    with a priority queue of states to be examined, so that of the not-
-    yet-processed nodes, the lowest-numbered node will always be processed
-    first.
+    exiting nodes are numbered higher than any nodes in the interiors of
+    the structures they are exiting.  Then the queue of states waiting
+    to be examined in the conventional epsilon-closure algorithm is
+    replaced with a *priority* queue of states to be examined, so that
+    of the not-yet-processed nodes, the lowest-numbered node will always
+    be processed first.
 
-  * In order to bound the storage of the search, whenever two threads
+  * In order to bound the storage of the search, whenever two NStates
     reach the same node in the SNFA, only one is retained.  Recall that
-    threads record the starting offset in the input string, their stacks,
+    NStates record the starting offset in the input string, their stacks,
     and the starting and ending offsets of parenthesized sub-expressions
-    encountered previously in the history of the thread.  When comparing
-    two threads to pick the winner at a particular SNFA node, if one
-    of the threads has an earlier starting offset than the other, that
-    thread will win.  Otherwise if both threads have the same starting
-    offset, then the thread stacks will be compared to choose the winner.
+    encountered previously in the history of the NState.  When comparing
+    two NStates to pick the winner at a particular SNFA node, if one
+    of the NStates has an earlier starting offset than the other, that
+    NState will win.  Otherwise if both NStates have the same starting
+    offset, then the NState stacks will be compared to choose the winner.
 
     The SNFA is constructed with the extremely important property that
-    at every node, the stack layouts of different arriving threads
-    will be identical.  The stack comparison rule then is that stacks
+    at every node, the stack layouts of different arriving NStates
+    will be identical.  The stack comparison rule then is that stack
     entries are compared in lexical scope order, from outermost (oldest)
     stack levels to inner (youngest) stack levels.  At each stack level,
-    if the stack entries at that level of the two competing threads
-    differ, the thread with the numerically larger stack entry value
-    will be chosen as the winner.  Otherwise, the comparison proceeds
-    to increasingly inner stack levels.
+    if the stack entries at that level of the two competing NStates
+    differ, the NState with the numerically larger stack entry value
+    will be chosen as the winner.  Otherwise, as long as corresponding
+    stack entries remain equal the comparison proceeds to increasingly
+    inner stack levels.
 
     Comparing stack entries lexically from outermost to innermost
     corresponds to the POSIX regular expression requirement that the
-    best solution to the overall "outer" position and length of the
-    whole regular expression takes precedence over the best solution(s)
-    of the subpatterns, and this applies recursively to subpatterns of
-    the subpatterns and so on.
+    solution that maximizes the overall "outer" position and length of
+    the whole regular expression takes precedence over finding maximum
+    solution(s) of the more-local subpatterns, and this idea applies
+    recursively to subpatterns of the subpatterns and so on.
 
 In order to develop an intuition for how this works, we will look at
 specific node types used in the syntax-directed translation of regular
@@ -136,10 +166,10 @@ completely traditional:
 * xlate[[ ab ]]		=>	xlate[[ a ]] xlate[[ b ]]
 * xlate[[ (a) ]]	=>	SUBL xlate[[ a ]] SUBR
 
-Compared to classic NFA algorithms in the literature, the only difference
-above is that parentheses in the source regular expression correspond
-to epsilon-matching SUBL/SUBR nodes in the SNFA, whereas in classic NFA
-algorithms parentheses do not appear in the NFA at all.
+Compared to classic Thompson's construction, the only difference above is
+that parentheses in the source regular expression are translated into
+epsilon-matching SUBL/SUBR nodes in the SNFA, whereas in the traditional
+algorithm parentheses do not appear in the output NFA at all.
 
 All of the node types mentioned above (FORK, GOTO, JOIN, LOOP, NEXT, SUBL,
 and SUBR) are epsilon-matching node types.  All of the action of POSIX
@@ -151,19 +181,20 @@ of the structure-entering and structure-existing node types in MinRX:
 
   * A FORK node pushes a single stack entry, and a JOIN node pops it.
     The interior nodes of the FORK...JOIN construct as well as the JOIN
-    node itself therefore have a stack depth 1 greater than the stack depth
-    of the FORK node.  The FORK node additionally splits each thread into
-    two threads for the left and right branches of the regular expression
-    alternatives.  The value of the stack entry that is pushed is -1 on
-    the thread sent to the left branch of the alternative, and -2 on the
-    thread sent to the right branch of the alternative.  Then when the
-    stacks of threads exiting the alternative are compared upon arriving
-    at the JOIN node at any particular character boundary in the search
-    string, in the absence of any overriding constraints inherited from
-    enclosing structures the choose-greater rule in the FORK's stack
-    entry comparison will cause threads joining from the left branch to
-    take precedence over threads joining from the right branch.  This
-    implements the POSIX rule preferring the left alternative.
+    node itself therefore have a stack depth 1 greater than the stack
+    depth of the FORK node.  The FORK node additionally splits each
+    incoming NState into two outgoing NStates for the left and right
+    branches of the regular expression alternatives.  The value of the
+    stack entry that is pushed is -1 on the NState sent to the left
+    branch of the alternative, and -2 on the NState sent to the right
+    branch of the alternative.  Then when the stacks of NStates exiting
+    the alternative are compared upon arriving at the JOIN node at any
+    particular character boundary in the search string, in the absence
+    of any overriding constraints inherited from enclosing structures
+    the choose-greater rule in the FORK's stack entry comparison will
+    cause NStates joining from the left branch to take precedence over
+    NStates joining from the right branch.  This implements the POSIX
+    rule preferring the left alternative.
 
     In order to minimize maximum stack depth, and since regular expression
     alternatives are equally left- and right-associative, MinRX actually
@@ -177,26 +208,27 @@ of the structure-entering and structure-existing node types in MinRX:
     of the stack entry that is pushed is the offset within the string at
     the current point in the match at which the SUBL node is traversed.
     The choose-greater rule in stack entry comparison will ensure that
-    if two threads exiting a SUBR at a particular character boundary are
-    not otherwise disambiguated by inherited outer constraints, then the
-    thread whose SUBL occured at a *later* point in the input string will
-    be chosen.  In other words, the greater-than stack entry comparison
-    rule chooses the SHORTER of the two exiting subexpressions' threads!
+    if two NStates exiting a SUBR at a particular character boundary
+    are not otherwise disambiguated by inherited outer constraints,
+    then the NState whose SUBL occured at a *later* point in the input
+    string will be chosen.  In other words, the greater-than stack entry
+    comparison rule chooses the NState corresponding to the SHORTER of
+    the two exiting matches so far.
 
     Wait, what?  Isn't the POSIX requirement to recursively find LONGEST
     matches?  What's this shortest business doing???  The key observation
-    is that picking the SHORTEST match for SUBL...SUBR has the effect of
-    maximizing the length of input string previously matched to the LEFT
-    of the SUBL.  This rule prioritizes longer matches for previous
+    is that preferring the SHORTEST match for SUBL...SUBR has the effect
+    of maximizing the length of input string previously matched to the
+    LEFT of the SUBL.  This rule prioritizes longer matches for earlier
     subpatterns in the regular expression.
 
     The stack frame pushed by SUBL serves an additional purpose besides
     picking winners: when a SUBR node corresponding to a user-inserted
     closing parenthesis is exited, the starting string position is popped
     from the stack and written, together with the current string position,
-    into the thread's vector of recorded POSIX subexpression starting and
-    ending offsets.  So (start, end) offsets don't appear in the thread's
-    subexpression position vector until the thread has actually completed
+    into the NState's vector of recorded POSIX subexpression starting and
+    ending offsets.  So (start, end) offsets don't appear in the NState's
+    subexpression position vector until the NState has actually completed
     matching the entire subexpression.
 
   * LOOP...NEXT constructs are by far the most complicated and push three
@@ -282,7 +314,7 @@ Some caveats:
     they do not correspond to finite automata at all.  The algorithm
     described here could probably be straightforwardly modified to search
     for backreference expressions, but would lose the property that the
-    maximum number of threads in flight is equal to the size of the NFA,
+    maximum number of NStates in flight is equal to the size of the NFA,
     and it would almost certainly require exponential space even in
     relatively simple cases, and so would be unlikely to be generally usable.
 
@@ -298,7 +330,7 @@ Future work:
     (Or give up on this approach and look for new ideas...)
 
   * Implement a caching-DFA-like matcher based on this approach.  Certainly
-    there is no direct DFA implementation, since thread stacks containing
+    there is no direct DFA implementation, since NState stacks containing
     arbitrary counts would map to infinite numbers of automaton states.
     But there may be tricks to hoist count parameters out of the automaton
     states, or perhaps just cache (and regenerate upon demand) a finite
