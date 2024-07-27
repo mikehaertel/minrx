@@ -71,5 +71,6 @@ main(int argc, char *argv[])
 		if (rm[0].rm_so == rm[0].rm_eo)
 			++rm[0].rm_eo;
 	}
+	minrx_regfree(&rx);
 	exit(EXIT_SUCCESS);
 }
