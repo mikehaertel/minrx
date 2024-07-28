@@ -56,9 +56,9 @@ main(int argc, char *argv[])
 		if (rm[0].rm_eo != lasteo) {
 			int j;
 			for (j = rx.re_nsub; j > 0; --j)
-				if (rm[j - 1].rm_so != -1)
+				if (rm[j].rm_so != -1)
 					break;
-			for (int i = 0; i < j; ++i)
+			for (int i = 0; i <= j; ++i)
 				if (rm[i].rm_so != -1)
 					printf("(%d,%d)", (int) rm[i].rm_so, (int) rm[i].rm_eo);
 				else

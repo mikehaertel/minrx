@@ -1132,7 +1132,7 @@ minrx_regncomp(minrx_regex_t *rx, std::size_t ns, const char *s, int flags)
 {
 	auto r = MinRX::Compile(s, s + ns, (minrx_regcomp_flags_t) flags).compile();
 	rx->re_regexp = r;
-	rx->re_nsub = r->nsub;
+	rx->re_nsub = r->nsub - 1;
 	rx->re_compflags = (minrx_regcomp_flags_t) flags;
 	return r->err;
 }
