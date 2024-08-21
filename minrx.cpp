@@ -246,14 +246,17 @@ struct QVec {
 
 typedef int32_t WChar;			// because wchar_t may not be 32 bits
 constexpr int32_t WCharMax = 0x10FFFF;	// maximum code point: valid for Unicode and (FIXME!) blithely assumed for non-Unicode
-struct WConv {
+class WConv {
+public:
 	enum { End = -1 };
+private:
 	const char *const bp;
 	const char *const ep;
 	const char *cp;
 	std::mbstate_t mbs;
 	WChar wch = End;
 	int len = 0;
+public:
 	WConv(const WConv &) = default;
 	WConv(const char *bp, const char *ep): bp(bp), ep(ep), cp(bp) { std::memset(&mbs, 0, sizeof mbs); }
 	auto look() const { return wch; }
@@ -272,6 +275,8 @@ struct WConv {
 		}
 		return *this;
 	}
+	std::size_t off() const { return cp - bp; }
+	auto ptr() const { return cp; }
 	auto save() { return std::make_tuple(cp, wch, len); }
 	void restore(std::tuple<const char *, WChar, int> t) { std::tie(cp, wch, len) = t; }
 };
@@ -650,21 +655,20 @@ struct Compile {
 								return {{}, 0, MINRX_REG_ECOLLATE};
 						} else if (wc == L':') {
 							wconv.nextchr();
-							// FIXME: search for the matching :] using wconv.nextchr() rather than memchr()
-							const char *colon = (const char *) std::memchr(wconv.cp, ':', wconv.ep - wconv.cp);
-							if (colon && wconv.ep - colon >= 2 && colon[1] == ']') {
-								auto cclname = std::string(wconv.cp, colon);
-								if (cclass(cs, cclname)) {
-									wconv.cp = colon + 2;
-									wconv.len = 0;
-									wc = wconv.nextchr().look();
-									continue; // can't be range endpoint
-								} else {
-									return {{}, 0, MINRX_REG_ECTYPE};
-								}
-							} else {
+							auto bp = wconv.ptr();
+							while (wconv.look() != WConv::End && wconv.look() != L':')
+								wconv.nextchr();
+							if (wconv.look() != L':')
 								return {{}, 0, MINRX_REG_ECTYPE};
-							}
+							auto ep = wconv.ptr();
+							wconv.nextchr();
+							if (wconv.look() != L']')
+								return {{}, 0, MINRX_REG_ECTYPE};
+							wc = wconv.nextchr().look();
+							auto cclname = std::string(bp, ep);
+							if (cclass(cs, cclname))
+								continue;
+							return {{}, 0, MINRX_REG_ECTYPE};
 						} else if (wc == L'=') {
 							// FIXME: recognize some equivalence classes.
 							return {{}, 0, MINRX_REG_ECOLLATE};
@@ -864,12 +868,12 @@ std::mutex Compile::cclmutex;
 struct Execute {
 	typedef COWVec<std::size_t, (std::size_t) -1> Vec;
 	struct NState {
-		const char *bp = nullptr;
+		std::size_t boff;
 		Vec substack;
 		NState() {}
 		NState(Vec::Allocator &allocator): substack(allocator) {}
 		bool cmpgt(const NState &ns, std::size_t nstk) const {
-			return bp != ns.bp ? bp < ns.bp : substack.cmpgt(ns.substack, nstk);
+			return boff != ns.boff ? boff < ns.boff : substack.cmpgt(ns.substack, nstk);
 		}
 	};
 	const Regexp &r;
@@ -898,13 +902,13 @@ struct Execute {
 		do {
 			NInt k = epsq.remove();
 			NState &ns = epsv.lookup(k);
-			if (best.has_value() && (std::size_t) (ns.bp - wconv.bp) > best->get(r.nstk + 0))
+			if (best.has_value() && ns.boff > best->get(r.nstk + 0))
 				continue;
 			const auto &n = nodes[k];
 			switch (n.type) {
 			case Node::Exit:
 				{
-					std::size_t b = ns.bp - wconv.bp, e = wconv.cp - wconv.bp;
+					auto b = ns.boff, e = wconv.off();
 					if (!best.has_value()
 					    || b < best->get(r.nstk + 0)
 					    || (b == best->get(r.nstk + 0) && e >= best->get(r.nstk + 1)))
@@ -940,9 +944,9 @@ struct Execute {
 			case Node::Loop:
 				{
 					NState nscopy = ns;
-					nscopy.substack.put(n.nstk, wconv.cp - wconv.bp);
+					nscopy.substack.put(n.nstk, wconv.off());
 					nscopy.substack.put(n.nstk + 1, -1);
-					nscopy.substack.put(n.nstk + 2, wconv.cp - wconv.bp);
+					nscopy.substack.put(n.nstk + 2, wconv.off());
 					add(ncsv, k + 1, nscopy);
 					if (n.args[1]) {
 						nscopy.substack.put(n.nstk + 1, 0);
@@ -953,10 +957,10 @@ struct Execute {
 			case Node::Next:
 				{
 					add(ncsv, k + 1, ns);
-					if (n.args[1] && (std::size_t) (wconv.cp - wconv.bp) > ns.substack.get(n.nstk - 1)) {
+					if (n.args[1] && wconv.off() > ns.substack.get(n.nstk - 1)) {
 						NState nscopy = ns;
 						nscopy.substack.sub(n.nstk - 2, 1);
-						nscopy.substack.put(n.nstk - 1, wconv.cp - wconv.bp);
+						nscopy.substack.put(n.nstk - 1, wconv.off());
 						add(ncsv, k - n.args[0], nscopy);
 					}
 				}
@@ -964,7 +968,7 @@ struct Execute {
 			case Node::SubL:
 				{
 					NState nscopy = ns;
-					nscopy.substack.put(n.nstk, wconv.cp - wconv.bp);
+					nscopy.substack.put(n.nstk, wconv.off());
 					if (n.args[0] != (NInt) -1)
 						for (auto i = n.args[0]; i <= n.args[1]; ++i) {
 							nscopy.substack.put(r.nstk + i * 2, -1);
@@ -977,46 +981,46 @@ struct Execute {
 				if (n.args[0] != (NInt) -1) {
 					NState nscopy = ns;
 					nscopy.substack.put(r.nstk + n.args[0] * 2 + 0, ns.substack.get(n.nstk - 1));
-					nscopy.substack.put(r.nstk + n.args[0] * 2 + 1, wconv.cp - wconv.bp);
+					nscopy.substack.put(r.nstk + n.args[0] * 2 + 1, wconv.off());
 					add(ncsv, k + 1, nscopy);
 				} else {
 					add(ncsv, k + 1, ns);
 				}
 				break;
 			case Node::ZBOB:
-				if (wconv.cp == wconv.bp && (flags & MINRX_REG_NOTBOL) == 0)
+				if (wconv.off() == 0 && (flags & MINRX_REG_NOTBOL) == 0)
 					add(ncsv, k + 1, ns);
 				break;
 			case Node::ZEOB:
-				if (wconv.cp == wconv.ep && (flags & MINRX_REG_NOTEOL) == 0)
+				if (wconv.look() == WConv::End && (flags & MINRX_REG_NOTEOL) == 0)
 					add(ncsv, k + 1, ns);
 				break;
 			case Node::ZBOL:
-				if (((wconv.cp == wconv.bp && (flags & MINRX_REG_NOTBOL) == 0)) || lookback == L'\n')
+				if (((wconv.off() == 0 && (flags & MINRX_REG_NOTBOL) == 0)) || lookback == L'\n')
 					add(ncsv, k + 1, ns);
 				break;
 			case Node::ZEOL:
-				if (((wconv.cp == wconv.ep && (flags & MINRX_REG_NOTEOL) == 0)) || wconv.look() == L'\n')
+				if (((wconv.look() == WConv::End && (flags & MINRX_REG_NOTEOL) == 0)) || wconv.look() == L'\n')
 					add(ncsv, k + 1, ns);
 				break;
 			case Node::ZBOW:
-				if ((wconv.cp == wconv.bp || !is_word(lookback)) && (wconv.cp != wconv.ep && is_word(wconv.look())))
+				if ((wconv.off() == 0 || !is_word(lookback)) && (wconv.look() != WConv::End && is_word(wconv.look())))
 					add(ncsv, k + 1, ns);
 				break;
 			case Node::ZEOW:
-				if ((wconv.cp != wconv.bp && is_word(lookback)) && (wconv.cp == wconv.ep || !is_word(wconv.look())))
+				if ((wconv.off() != 0 && is_word(lookback)) && (wconv.look() == WConv::End || !is_word(wconv.look())))
 					add(ncsv, k + 1, ns);
 				break;
 			case Node::ZXOW:
-				if (   ((wconv.cp == wconv.bp || !is_word(lookback)) && (wconv.cp != wconv.ep && is_word(wconv.look())))
-				    || ((wconv.cp != wconv.bp && is_word(lookback)) && (wconv.cp == wconv.ep || !is_word(wconv.look()))))
+				if (   ((wconv.off() == 0 || !is_word(lookback)) && (wconv.look() != WConv::End && is_word(wconv.look())))
+				    || ((wconv.off() != 0 && is_word(lookback)) && (wconv.look() == WConv::End || !is_word(wconv.look()))))
 					add(ncsv, k + 1, ns);
 				break;
 			case Node::ZNWB:
-				if (   (wconv.cp == wconv.bp && wconv.cp == wconv.ep)
-				    || (wconv.cp == wconv.bp && wconv.cp != wconv.ep && !is_word(wconv.look()))
-				    || (wconv.cp != wconv.bp && wconv.cp == wconv.ep && !is_word(lookback))
-				    || (wconv.cp != wconv.bp && wconv.cp != wconv.ep && is_word(lookback) == is_word(wconv.look())))
+				if (   (wconv.off() == 0 && wconv.look() == WConv::End)
+				    || (wconv.off() == 0 && wconv.look() != WConv::End && !is_word(wconv.look()))
+				    || (wconv.off() != 0 && !is_word(lookback) && wconv.look() == WConv::End)
+				    || (wconv.off() != 0 && wconv.look() != WConv::End && is_word(lookback) == is_word(wconv.look())))
 					add(ncsv, k + 1, ns);
 				break;
 			default:
@@ -1030,10 +1034,10 @@ struct Execute {
 		auto nodes = &r.nodes[0];
 		wconv.nextchr();
 		if ((flags & MINRX_REG_RESUME) != 0 && rm && rm[0].rm_eo > 0)
-			while (wconv.cp != wconv.ep && wconv.cp - wconv.bp != rm[0].rm_eo)
+			while (wconv.look() != WConv::End && wconv.off() < rm[0].rm_eo)
 				lookback = wconv.look(), wconv.nextchr();
 		NState nsinit(allocator);
-		nsinit.bp = wconv.cp;
+		nsinit.boff = wconv.off();
 		add(mcsvs[0], 0, nsinit);
 		if (!epsq.empty())
 			epsclosure(mcsvs[0]);
@@ -1056,7 +1060,7 @@ struct Execute {
 			}
 			wconv.nextchr(), lookback = wc, wc = wconv.look();
 			if (!best.has_value()) {
-				nsinit.bp = wconv.cp;
+				nsinit.boff = wconv.off();
 				add(mcsvs[1], 0, nsinit);
 			}
 			if (!epsq.empty())
@@ -1080,7 +1084,7 @@ struct Execute {
 			}
 			wconv.nextchr(), lookback = wc, wc = wconv.look();
 			if (!best.has_value()) {
-				nsinit.bp = wconv.cp;
+				nsinit.boff = wconv.off();
 				add(mcsvs[0], 0, nsinit);
 			}
 			if (!epsq.empty())
@@ -1128,7 +1132,7 @@ minrx_regncomp(minrx_regex_t *rx, std::size_t ns, const char *s, int flags)
 {
 	auto r = MinRX::Compile(s, s + ns, (minrx_regcomp_flags_t) flags).compile();
 	rx->re_regexp = r;
-	rx->re_nsub = r->nsub;
+	rx->re_nsub = r->nsub - 1;
 	rx->re_compflags = (minrx_regcomp_flags_t) flags;
 	return r->err;
 }
