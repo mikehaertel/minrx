@@ -3,10 +3,10 @@ project('minrx', ['c', 'cpp'],
         default_options : ['warning_level=3', 'cpp_std=c++20'])
 
 libminrx_inc = include_directories('.')
-libminrx_lib = shared_library('minrx',
-                              'minrx.cpp',
-                              install : true,
-                              soversion : '0')
+libminrx_lib = library('minrx',
+		       'minrx.cpp',
+		       install : true,
+		       soversion : '0')
 
 libminrx_dep = declare_dependency(
     link_with : libminrx_lib,

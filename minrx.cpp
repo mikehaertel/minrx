@@ -1034,7 +1034,7 @@ struct Execute {
 		auto nodes = &r.nodes[0];
 		wconv.nextchr();
 		if ((flags & MINRX_REG_RESUME) != 0 && rm && rm[0].rm_eo > 0)
-			while (wconv.look() != WConv::End && wconv.off() < rm[0].rm_eo)
+			while (wconv.look() != WConv::End && (std::ptrdiff_t) wconv.off() < rm[0].rm_eo)
 				lookback = wconv.look(), wconv.nextchr();
 		NState nsinit(allocator);
 		nsinit.boff = wconv.off();
@@ -1050,7 +1050,7 @@ struct Execute {
 				auto [n, ns] = mcsvs[0].remove();
 				auto t = nodes[n].type;
 				if (t <= WCharMax) {
-					if (wc != t)
+					if (wc != (WChar) t)
 						continue;
 				} else {
 					if (!r.csets[nodes[n].args[0]].test(wc))
@@ -1074,7 +1074,7 @@ struct Execute {
 				auto [n, ns] = mcsvs[1].remove();
 				auto t = nodes[n].type;
 				if (t <= WCharMax) {
-					if (wc != t)
+					if (wc != (WChar) t)
 						continue;
 				} else {
 					if (!r.csets[nodes[n].args[0]].test(wc))
