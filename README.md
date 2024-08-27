@@ -81,9 +81,17 @@ options needed to enable use in Gawk.
 
 ## Installation
 
-There is no real build system yet.  The included GNU `Makefile` builds a
-test program called `tryit` which will print a usage message if it
-is invoked with no arguments.
+A `meson` build has been contributed by shenleban tongying.  The included
+GNU `Makefile` provides targets `compile`, `install`, and `uninstall` that
+invoke the `meson` build, e.g. `make PREFIX=/some/dir install`.
+
+There is a test program `tryit` that is built by `make compile`, which will
+print a usage message if invoked with no arguments.  (This is not installed
+by `make install`).
+
+If you don't have `meson` you can `make tryit` to build the test program.
+
+`make clean` removes all build artifacts (both `meson` and traditional).
 
 ## Future plans
 
