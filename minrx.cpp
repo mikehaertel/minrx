@@ -18,7 +18,6 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 
-#include <cctype>
 #include <climits>
 #include <clocale>
 #include <cstddef>
@@ -544,7 +543,7 @@ struct Compile {
 				wconv.nextchr();
 				continue;
 			case L'{':
-				if ((flags & MINRX_REG_BRACE_COMPAT) == 0 || std::isdigit(wconv.lookahead(&WConv::nextchr))) {
+				if ((flags & MINRX_REG_BRACE_COMPAT) == 0 || std::iswdigit(wconv.lookahead(&WConv::nextchr))) {
 					if (optional || infinite) {
 						lh = mkrep(lh, optional, infinite, nstk);
 						optional = infinite = false;
@@ -617,7 +616,7 @@ struct Compile {
 			wconv.nextchr();
 			break;
 		case L'{':
-			if ((flags & MINRX_REG_BRACE_COMPAT) != 0 && !std::isdigit(wconv.lookahead(&WConv::nextchr)))
+			if ((flags & MINRX_REG_BRACE_COMPAT) != 0 && !std::iswdigit(wconv.lookahead(&WConv::nextchr)))
 				goto normal;
 			// fall through
 		case L'*':
