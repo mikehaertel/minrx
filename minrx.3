@@ -78,6 +78,20 @@ Enable BSD extensions \f(CW\e<\fP and \f(CW\e>\fP.
 .TP
 \f(CWMINRX_REG_EXTENSIONS_GNU\fP
 Enable GNU extensions \f(CW\eb \eB \es \eS \ew \eW\fP.
+.TP
+\f(CWMINRX_REG_NATIVE1B\fP
+Use native encoding for 1-byte character sets (including the "C" locale and
+any locale in which \f(CWMB_CUR_MAX == 1\fP).
+.IP
+This affects the interpretation of ranges in bracket expressions
+and also treats all possible byte values as valid code points.
+This improves compatibility with historical matchers, but may result in
+(more-)surprising behavior if the \f(CWLC_CTYPE\fP locale is changed
+between compilation and execution.
+.IP
+This will produce sensible results only in \f(CWLC_CTYPE\fP locales
+that have the same encodings as ASCII/ISO8859 for the regular expression
+special characters.
 .RE
 .PP
 The following values may be returned from

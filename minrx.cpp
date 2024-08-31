@@ -18,6 +18,7 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 
+#include <cctype>
 #include <climits>
 #include <clocale>
 #include <cstddef>
@@ -27,6 +28,7 @@
 #include <cwctype>
 #include <algorithm>
 #include <deque>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -248,37 +250,107 @@ constexpr int32_t WCharMax = 0x10FFFF;	// maximum code point: valid for Unicode 
 class WConv {
 public:
 	enum { End = -1 };
+	enum class Encoding { Byte, MBtoWC, UTF8 };
 private:
+	WConv &(WConv::*const nextfn)();
 	const char *const bp;
 	const char *const ep;
 	const char *cp;
 	std::mbstate_t mbs;
 	WChar wch = End;
 	int len = 0;
+	static WConv &(WConv::*const nextfns[])();
 public:
 	WConv(const WConv &) = default;
-	WConv(const char *bp, const char *ep): bp(bp), ep(ep), cp(bp) { std::memset(&mbs, 0, sizeof mbs); }
+	WConv(Encoding e, const char *bp, const char *ep)
+	: nextfn(nextfns[(int) e]), bp(bp), ep(ep), cp(bp) {
+		std::memset(&mbs, 0, sizeof mbs);
+	}
 	auto look() const { return wch; }
-	auto lookahead(WConv &(WConv::*next)()) const { return (WConv(*this).*next)().look(); }
-	WConv &nextchr() {
+	auto lookahead() const { return WConv(*this).nextchr().look(); }
+	WConv &nextchr() { return (this->*nextfn)(); }
+	WConv &nextbyte() {
+		if ((cp += len) != ep)
+			len = 1, wch = (unsigned char) *cp;
+		else
+			len = 0, wch = End;
+		return *this;
+	}
+	WConv &nextmbtowc() {
 		wchar_t wct = L'\0';
 		if ((cp += len) != ep) {
 			auto n = mbrtowc(&wct, cp, ep - cp, &mbs);
-			if (n == 0 || n == (std::size_t) -1 || n == (std::size_t) -2)
+			if (n == 0 || n == (std::size_t) -1 || n == (std::size_t) -2) {
 				len = 1;
-			else
+				if (wct == L'\0')
+					wct = std::numeric_limits<WChar>::min() + (unsigned char) *cp;
+			} else {
 				len = n;
+			}
 			wch = wct;
 		} else {
-			wch = End, len = 0;
+			len = 0, wch = End;
 		}
 		return *this;
+	}
+	WConv &nextutf8() {
+		if ((cp += len) != ep) {
+			WChar u = (unsigned char) cp[0];
+			if (u < 0x80) {
+				len = 1, wch = u;
+				return *this;
+			}
+			if ((u & 0x40) == 0 || cp + 1 == ep) {
+			error:
+				len = 1, wch = std::numeric_limits<WChar>::min() + u;
+				return *this;
+			}
+			WChar v = (unsigned char) cp[1];
+			if ((v & 0xC0) != 0x80)
+				goto error;
+			if ((u & 0x20) == 0) {
+				WChar r = ((u & 0x1F) << 6) | (v & 0x3F);
+				if (r < 0x80)
+					goto error;
+				len = 2, wch = r;
+				return *this;
+			}
+			if (cp + 2 == ep)
+				goto error;
+			WChar w = (unsigned char) cp[2];
+			if ((w & 0xC0) != 0x80)
+				goto error;
+			if ((u & 0x10) == 0) {
+				WChar r = ((u & 0x0F) << 12) | ((v & 0x3F) << 6) | (w & 0x3F);
+				if (r < 0x800)
+					goto error;
+				len = 3, wch = r;
+				return *this;
+			}
+			if (cp + 3 == ep)
+				goto error;
+			WChar x = (unsigned char) cp[3];
+			if ((x & 0xC0) != 0x80)
+				goto error;
+			if ((u & 0x08) != 0)
+				goto error;
+			WChar r = ((u & 0x07) << 18) | ((v & 0x3F) << 12) | ((w & 0x3F) << 6) | (x & 0x3F);
+			if (r < 0x010000 || r > 0x10FFFF)
+				goto error;
+			len = 4, wch = r;
+			return *this;
+		} else {
+			len = 0, wch = End;
+			return *this;
+		}
 	}
 	std::size_t off() const { return cp - bp; }
 	auto ptr() const { return cp; }
 	auto save() { return std::make_tuple(cp, wch, len); }
 	void restore(std::tuple<const char *, WChar, int> t) { std::tie(cp, wch, len) = t; }
 };
+
+WConv &(WConv::*const WConv::nextfns[3])() = { &WConv::nextbyte, &WConv::nextmbtowc, &WConv::nextutf8 };
 
 struct CSet {
 	struct Range {
@@ -297,7 +369,7 @@ struct CSet {
 	}
 	CSet &invert() { inverted = true; return *this; }
 	CSet &set(WChar wclo, WChar wchi) {
-		auto e = Range(wclo - (wclo != -2147483648), wchi + (wchi != 2147483647));
+		auto e = Range(wclo - (wclo != std::numeric_limits<WChar>::min()), wchi + (wchi != std::numeric_limits<WChar>::max()));
 		auto [x, y] = ranges.equal_range(e);
 		if (x == y) {
 			ranges.insert(Range(wclo, wchi));
@@ -315,6 +387,8 @@ struct CSet {
 	}
 	CSet &set(WChar wc) { return set(wc, wc); }
 	bool test(WChar wc) const {
+		if (wc < 0)
+			return false;
 		auto i = ranges.lower_bound(Range(wc, wc));
 		return inverted ^ (i != ranges.end() && wc >= i->min && wc <= i->max);
 	}
@@ -355,17 +429,19 @@ struct Regexp {
 	const std::vector<Node> nodes;
 	std::size_t nstk;
 	std::size_t nsub;
+	WConv::Encoding enc;
 	minrx_result_t err;
 };
 
 struct Compile {
 	const minrx_regcomp_flags_t flags;
+	WConv::Encoding enc;
 	WConv wconv;
 	std::vector<CSet> csets;
 	std::optional<std::size_t> dot;
 	std::map<WChar, unsigned int> icmap;
 	NInt nsub = 0;
-	Compile(const char *bp, const char *ep, minrx_regcomp_flags_t flags): flags(flags), wconv(bp, ep) { wconv.nextchr(); }
+	Compile(WConv::Encoding e, const char *bp, const char *ep, minrx_regcomp_flags_t flags): flags(flags), enc(e), wconv(e, bp, ep) { wconv.nextchr(); }
 	static std::map<std::string, CSet> cclmemo;
 	static std::mutex cclmutex;
 	bool cclass(CSet &cs, const std::string &name) {
@@ -376,15 +452,26 @@ struct Compile {
 			auto i = cclmemo.find(key);
 			if (i == cclmemo.end()) {
 				CSet cs;
-				for (WChar wc = 0; wc <= WCharMax; ++wc) {
-					if (iswctype(wc, wct)) {
-						cs.set(wc);
-						if ((flags & MINRX_REG_ICASE) != 0) {
-							cs.set(std::towlower(wc));
-							cs.set(std::towupper(wc));
+				if (enc == WConv::Encoding::Byte)
+					for (WChar b = 0; b <= 0xFF; ++b) {
+						if (std::iswctype(std::btowc(b), wct)) {
+							cs.set(b);
+							if ((flags & MINRX_REG_ICASE) != 0) {
+								cs.set(std::tolower(b));
+								cs.set(std::toupper(b));
+							}
 						}
 					}
-				}
+				else
+					for (WChar wc = 0; wc <= WCharMax; ++wc) {
+						if (std::iswctype(wc, wct)) {
+							cs.set(wc);
+							if ((flags & MINRX_REG_ICASE) != 0) {
+								cs.set(std::towlower(wc));
+								cs.set(std::towupper(wc));
+							}
+						}
+					}
 				cclmemo.emplace(key, cs);
 				i = cclmemo.find(key);
 			}
@@ -543,7 +630,10 @@ struct Compile {
 				wconv.nextchr();
 				continue;
 			case L'{':
-				if ((flags & MINRX_REG_BRACE_COMPAT) == 0 || std::iswdigit(wconv.lookahead(&WConv::nextchr))) {
+				if ((flags & MINRX_REG_BRACE_COMPAT) == 0
+				    || (enc == WConv::Encoding::Byte ? std::isdigit(wconv.lookahead())
+								     : std::iswdigit(wconv.lookahead())))
+				{
 					if (optional || infinite) {
 						lh = mkrep(lh, optional, infinite, nstk);
 						optional = infinite = false;
@@ -602,21 +692,28 @@ struct Compile {
 			if ((flags & MINRX_REG_ICASE) == 0) {
 				lhs.push_back({(NInt) wc, {0, 0}, nstk});
 			} else {
-				WChar wcl = std::towlower(wc), wcu = std::towupper(wc);
-				auto key = std::min(wc, std::min(wcl, wcu));
-				if (icmap.find(key) == icmap.end()) {
-					icmap.emplace(key, csets.size());
-					csets.emplace_back();
-					csets.back().set(wc);
-					csets.back().set(wcl);
-					csets.back().set(wcu);
+				WChar wcl = enc == WConv::Encoding::Byte ? std::tolower(wc) : std::towlower(wc);
+				WChar wcu = enc == WConv::Encoding::Byte ? std::toupper(wc) : std::towupper(wc);
+				if (wc != wcl || wc != wcu) {
+					auto key = std::min(wc, std::min(wcl, wcu));
+					if (icmap.find(key) == icmap.end()) {
+						icmap.emplace(key, csets.size());
+						csets.emplace_back();
+						csets.back().set(wc);
+						csets.back().set(wcl);
+						csets.back().set(wcu);
+					}
+					lhs.push_back({Node::CSet, {icmap[key], 0}, nstk});
+				} else {
+					lhs.push_back({(NInt) wc, {0, 0}, nstk});
 				}
-				lhs.push_back({Node::CSet, {icmap[key], 0}, nstk});
 			}
 			wconv.nextchr();
 			break;
 		case L'{':
-			if ((flags & MINRX_REG_BRACE_COMPAT) != 0 && !std::iswdigit(wconv.lookahead(&WConv::nextchr)))
+			if ((flags & MINRX_REG_BRACE_COMPAT) != 0
+			    && (enc == WConv::Encoding::Byte ? !std::isdigit(wconv.lookahead())
+							     : !std::iswdigit(wconv.lookahead())))
 				goto normal;
 			// fall through
 		case L'*':
@@ -706,15 +803,17 @@ struct Compile {
 							wc = L'-';
 						}
 					}
-					if (wclo > wchi)
+					if (wclo > wchi || (wclo != wchi && (wclo < 0 || wchi < 0)))
 						return {{}, 0, MINRX_REG_ERANGE};
-					cs.set(wclo, wchi);
-					if ((flags & MINRX_REG_ICASE) != 0)
-						for (auto wc = wclo; wc <= wchi; ++wc) {
-							cs.set(std::tolower(wc));
-							cs.set(std::toupper(wc));
-						}
-					if (range && wc == L'-' && wconv.lookahead(&WConv::nextchr) != L']')
+					if (wclo >= 0) {
+						cs.set(wclo, wchi);
+						if ((flags & MINRX_REG_ICASE) != 0)
+							for (auto wc = wclo; wc <= wchi; ++wc) {
+								cs.set(enc == WConv::Encoding::Byte ? std::tolower(wc) : std::towlower(wc));
+								cs.set(enc == WConv::Encoding::Byte ? std::toupper(wc) : std::towupper(wc));
+							}
+					}
+					if (range && wc == L'-' && wconv.lookahead() != L']')
 						return {{}, 0, MINRX_REG_ERANGE};
 				}
 				lhs.push_back({Node::CSet, {csets.size(), 0}, nstk});
@@ -857,7 +956,7 @@ struct Compile {
 		} else {
 			lhs.push_back({Node::Exit, {0, 0}, 0});
 		}
-		return new Regexp{ std::move(csets), {lhs.begin(), lhs.end()}, nstk, nsub + 1, err };
+		return new Regexp{ std::move(csets), {lhs.begin(), lhs.end()}, nstk, nsub + 1, enc, err };
 	}
 };
 
@@ -883,7 +982,7 @@ struct Execute {
 	std::optional<COWVec<std::size_t, (std::size_t) -1>> best;
 	QSet<NInt> epsq { r.nodes.size() };
 	QVec<NInt, NState> epsv { r.nodes.size() };
-	Execute(const Regexp &r, minrx_regexec_flags_t flags, const char *bp, const char *ep) : r(r), flags(flags), wconv(bp, ep) {}
+	Execute(const Regexp &r, minrx_regexec_flags_t flags, const char *bp, const char *ep) : r(r), flags(flags), wconv(r.enc, bp, ep) {}
 	void add(QVec<NInt, NState> &ncsv, NInt n, const NState &ns) {
 		if (r.nodes[n].type <= Node::CSet) {
 			auto [newly, oldns] = ncsv.insert(n, ns);
@@ -895,9 +994,10 @@ struct Execute {
 				epsq.insert(n);
 		}
 	}
-	bool is_word(int wc) { return wc == L'_' || std::iswalnum(wc); }
 	void epsclosure(QVec<NInt, NState> &ncsv) {
 		auto nodes = r.nodes;
+		auto is_word = r.enc == WConv::Encoding::Byte ? [](WChar b) { return b == '_' || std::isalnum(b); }
+							      : [](WChar wc) { return wc == L'_' || std::iswalnum(wc); };
 		do {
 			NInt k = epsq.remove();
 			NState &ns = epsv.lookup(k);
@@ -1129,7 +1229,18 @@ minrx_regexec(minrx_regex_t *rx, const char *s, std::size_t nm, minrx_regmatch_t
 int
 minrx_regncomp(minrx_regex_t *rx, std::size_t ns, const char *s, int flags)
 {
-	auto r = MinRX::Compile(s, s + ns, (minrx_regcomp_flags_t) flags).compile();
+	auto enc = MinRX::WConv::Encoding::MBtoWC;
+	auto loc = std::setlocale(LC_CTYPE, nullptr);
+	if ((loc != nullptr && loc[0] == 'C' && loc[1] == '\0') || ((flags & MINRX_REG_NATIVE1B) != 0 && MB_CUR_MAX == 1))
+		enc = MinRX::WConv::Encoding::Byte;
+	else if (auto utf = std::strchr(loc ? loc : "", '.');
+		 utf != nullptr && (utf[1] == 'U' || utf[1] == 'u')
+				&& (utf[2] == 'T' || utf[2] == 't')
+				&& (utf[3] == 'F' || utf[3] == 'f')
+				&& (   (utf[4] == '8' && utf[5] == '\0')
+				    || (utf[4] == '-' && utf[5] == '8' && utf[6] == '\0')))
+		enc = MinRX::WConv::Encoding::UTF8;
+	auto r = MinRX::Compile(enc, s, s + ns, (minrx_regcomp_flags_t) flags).compile();
 	rx->re_regexp = r;
 	rx->re_nsub = r->nsub - 1;
 	rx->re_compflags = (minrx_regcomp_flags_t) flags;
