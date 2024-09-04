@@ -23,12 +23,14 @@
 
 #include <stdio.h>
 #include <errno.h>
+#include <getopt.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
-#include <getopt.h>
+#include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 
 #include "minrx.h"
 
@@ -56,11 +58,14 @@ char *pat_file = NULL;		// file with patterns
 minrx_regex_t *regexps = NULL;	// array of compiled regexps
 size_t num_regexps;		// how many we actually have
 
+int exit_val = EXIT_SUCCESS;
+
 static void parse_args(int argc, char **argv);
 static void usage(int exit_status);
 static void version(void);
 
 static char **get_patterns(const char *filename);
+static char ** build_pattern_list(char *pattern_list);
 static void build_regexps(char **pattern_list);
 
 
@@ -89,7 +94,7 @@ main(int argc, char **argv)
 	build_regexps(pattern_list);
 
 	if (argc - optind > 1)
-		do_filenames = true;
+		list_files = true;
 
 	for (i = optind; i < argc; i++) {
 		if (strcmp(argv[i], "-") == 0 || strcmp(argv[i], "/dev/stdin") == 0)
@@ -116,7 +121,7 @@ BEGINFILE {
 }
 ENDFILE {
     if (! no_print && count_only) {
-        if (do_filenames)
+        if (list_files)
             print file ":" fcount
         else
             print fcount
@@ -146,7 +151,7 @@ ENDFILE {
             nextfile
         }
 
-        if (do_filenames)
+        if (list_files)
             if (line_numbers)
                print FILENAME ":" FNR ":" $0
             else
@@ -185,7 +190,7 @@ parse_args(int argc, char **argv)
 		{ "invert-match",	no_argument,		& invert,	'v' },
 		{ "line-number",	no_argument,		&print_num,	'n' },
 		{ "line-regexp",	no_argument,		& wholelines,	'x' },
-		{ "no-messages",	no_argument		NULL,		's' },
+		{ "no-messages",	no_argument,		NULL,		's' },
 		{ "quiet",		no_argument,		NULL,		'q' },
 		{ "regexp",		required_argument,	NULL,		'e' },
 		{ "silent",		no_argument,		NULL,		'q' },
@@ -201,7 +206,7 @@ parse_args(int argc, char **argv)
 
 	opterr = 1;	// let getopt report errors
 	for (optopt = 0;
-	     (c = getopt_long(argc, argv, optlist, optab, NULL)) != EOF) {
+	     (c = getopt_long(argc, argv, optlist, optab, NULL)) != EOF;) {
 		switch (c) {
 		case 'c':
 			do_count = true;
@@ -225,7 +230,7 @@ parse_args(int argc, char **argv)
 			print_output = false;
 			break;
 		case 's':
-			print_error = false;
+			print_errors = false;
 			break;
 		case 'v':
 			invert = true;
@@ -244,7 +249,7 @@ parse_args(int argc, char **argv)
 			break;
 		case '?':
 		default:
-			usage(EXIT_FAILIURE);
+			usage(EXIT_FAILURE);
 		}
 	}
 
@@ -278,8 +283,8 @@ usage(int exit_status)
 			"\t-w, --word-regexp\tPattern must match a whole word\n"
 		/*	"\t-x, --line-regexp\tOnly print if the whole line matches\n" */
 			"\t-V, --version\tPrint program version\n"
-			"\t--help\tPrint this help\n"
-	       );
+			"\t--help\tPrint this help\n",
+		myname);
 	exit(exit_status);
 }
 
@@ -325,7 +330,7 @@ get_patterns(const char *filename)
 		exit(EXIT_FAILURE);
 	}
 
-	if ((count = read(fd, buffer, sbuf.st_size)) != st_size) {
+	if ((count = read(fd, buffer, sbuf.st_size)) != sbuf.st_size) {
 		fprintf(stderr, "%s: %s: could not read: %s\n",
 				myname, filename, strerror(errno));
 		free(buffer);
