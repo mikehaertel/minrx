@@ -200,6 +200,7 @@ process(const char *filename, FILE *fp)
 				if (buf[len] != '\n')	// in case last line doesn't have newline
 					putchar('\n');
 			}
+			break;	// after any match, get the next line
 		}
 	}
 
@@ -300,7 +301,7 @@ parse_args(int argc, char **argv)
 		}
 	}
 
-	if (pattern == NULL) {
+	if (pattern == NULL && pat_file == NULL) {
 		if (optind < argc) {
 			pattern = argv[optind];
 			optind++;
