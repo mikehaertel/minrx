@@ -79,6 +79,23 @@ MinRX also provides a few BSD extensions (`\< \>`) and GNU extensions
 passed at regexp compile time, as well as a few syntax compatibility
 options needed to enable use in Gawk.
 
+## Tools
+
+The program `rxgrep.c` is a minimal version of `egrep`, using MinRX for
+matching. It accepts the standard POSIX options for `grep`, but not `-E`
+or `-F`, as currently MinRX only supports Extended Regular Expressions. For
+the standard options, it also accepts the same corresponding long
+options as used by GNU `grep`, for compatibility (as far as it goes)
+with that program. `rxgrep --help` prints a short summary of the
+available options.
+
+Do *not* have high expectations for its performance. The code was written
+with simplicity and correctness in mind, not speed, and the MinRX matcher
+itself is not yet performant.
+
+You can compile `rxgrep.c` with either a C or a C++ compiler, but it
+must be linked with a C++ compiler.
+
 ## Installation
 
 A `meson` build has been contributed by shenleban tongying.  The included
@@ -130,6 +147,7 @@ under its own license, the text of which can be found in that file.
 
 Arnold Robbins pestered me for years to write this matcher, and enthusiastically
 tested numerous early versions of it with Gawk.
+He contributed the man page and `rxgrep.c`.
 
 Development of this matcher also benefitted immensely from a POSIX regular
 expression test suite developed by Douglas McIlroy, Glenn Fowler, and others.
