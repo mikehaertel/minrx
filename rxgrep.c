@@ -103,7 +103,7 @@ main(int argc, char **argv)
 		process("(standard input)", stdin);
 	else {
 		for (i = optind; i < argc; i++) {
-			if (strcmp(argv[i], "-") == 0 || strcmp(argv[i], "/dev/stdin") == 0)
+			if (strcmp(argv[i], "-") == 0)
 				process("(standard input)", stdin);
 			else {
 				FILE *fp = fopen(argv[i], "r");
@@ -247,7 +247,11 @@ parse_args(int argc, char **argv)
 		{ NULL, 0, NULL, '\0' }
 	};
 
-	myname = argv[0];
+	myname = strrchr(argv[0], '/');
+	if (myname == NULL)
+		myname = argv[0];
+	else
+		myname++;
 
 	/* we do error messages ourselves on invalid options */
 	opterr = false;
@@ -356,10 +360,22 @@ get_patterns(const char *filename)
 	ssize_t count;
 	char **result;
 
-	if (stat(filename, & sbuf) < 0) {
+	if (strcmp(filename, "-") == 0) {
+		fd = fileno(stdin);
+		filename = "(standard input)";
+	} else if ((fd = open(filename, O_RDONLY)) < 0) {
+		if (print_errors)
+			fprintf(stderr, "%s: %s: could not open: %s\n",
+					myname, filename, strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+
+	if (fstat(fd, & sbuf) < 0) {
 		if (print_errors)
 			fprintf(stderr, "%s: %s: could not stat: %s\n",
 					myname, filename, strerror(errno));
+		if (fd != fileno(stdin))
+			close(fd);
 		exit(EXIT_FAILURE);
 	}
 
@@ -367,6 +383,8 @@ get_patterns(const char *filename)
 		if (print_errors)
 			fprintf(stderr, "%s: %s: argument to -f must be a regular file\n",
 					myname, filename);
+		if (fd != fileno(stdin))
+			close(fd);
 		exit(EXIT_FAILURE);
 	}
 
@@ -374,14 +392,8 @@ get_patterns(const char *filename)
 		if (print_errors)
 			fprintf(stderr, "%s: out of memory: %s\n",
 					myname, strerror(errno));
-		exit(EXIT_FAILURE);
-	}
-
-	if ((fd = open(filename, O_RDONLY)) < 0) {
-		if (print_errors)
-			fprintf(stderr, "%s: %s: could not open: %s\n",
-					myname, filename, strerror(errno));
-		free(buffer);
+		if (fd != fileno(stdin))
+			close(fd);
 		exit(EXIT_FAILURE);
 	}
 
@@ -390,11 +402,13 @@ get_patterns(const char *filename)
 			fprintf(stderr, "%s: %s: could not read: %s\n",
 					myname, filename, strerror(errno));
 		free(buffer);
-		close(fd);
+		if (fd != fileno(stdin))
+			close(fd);
 		exit(EXIT_FAILURE);
 	}
 
-	(void) close(fd);
+	if (fd != fileno(stdin))
+		close(fd);
 	buffer[sbuf.st_size] = '\0';
 
 	result = build_pattern_list(buffer);
