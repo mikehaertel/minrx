@@ -363,6 +363,13 @@ get_patterns(const char *filename)
 		exit(EXIT_FAILURE);
 	}
 
+	if ((sbuf.st_mode & S_IFMT) != S_IFREG) {
+		if (print_errors)
+			fprintf(stderr, "%s: %s: argument to -f must be a regular file\n",
+					myname, filename);
+		exit(EXIT_FAILURE);
+	}
+
 	if ((buffer = (char *) malloc(sbuf.st_size + 2)) == NULL) {
 		if (print_errors)
 			fprintf(stderr, "%s: out of memory: %s\n",
