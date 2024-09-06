@@ -146,8 +146,8 @@ static void
 process(const char *filename, FILE *fp)
 {
 	static char *buf = NULL;
+	static size_t n = 0;
 	int fcount = 0;
-	size_t n = 0;
 	size_t nbytes;
 	int line_number;
 
@@ -252,9 +252,6 @@ parse_args(int argc, char **argv)
 		myname = argv[0];
 	else
 		myname++;
-
-	/* we do error messages ourselves on invalid options */
-	opterr = false;
 
 	opterr = 1;	// let getopt report errors
 	for (optopt = 0;
