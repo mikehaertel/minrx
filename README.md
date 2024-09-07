@@ -85,13 +85,28 @@ A `meson` build has been contributed by shenleban tongying.  The included
 GNU `Makefile` provides targets `compile`, `install`, and `uninstall` that
 invoke the `meson` build, e.g. `make PREFIX=/some/dir install`.
 
-There is a test program `tryit` that is built by `make compile`, which will
-print a usage message if invoked with no arguments.  (This is not installed
-by `make install`).
+There are two test program `rxgrep` and `tryit` that are built
+by `make compile`. These will print usage messages if invoked
+with no arguments.  (These are not installed by `make install`).
 
-If you don't have `meson` you can `make tryit` to build the test program.
+If you don't have `meson` you can `make rxgrep` and/or `make tryit`
+to build the test programs.
 
 `make clean` removes all build artifacts (both `meson` and traditional).
+
+## Tools
+
+The program `rxgrep` is a minimal version of `egrep`, using MinRX for
+matching. It accepts the standard POSIX options for `grep`, but not `-E`
+or `-F`, as currently MinRX only supports Extended Regular Expressions. For
+the standard options, it also accepts the same corresponding long
+options as used by GNU `grep`, for compatibility (as far as it goes)
+with that program. `rxgrep --help` prints a short summary of the
+available options.
+
+Do *not* have high expectations for `rxgrep` performance. The code
+was written with simplicity and correctness in mind, not speed, and
+the MinRX matcher itself is currently slow.
 
 ## Future plans
 
@@ -130,6 +145,7 @@ under its own license, the text of which can be found in that file.
 
 Arnold Robbins pestered me for years to write this matcher, and enthusiastically
 tested numerous early versions of it with Gawk.
+He contributed the manual page and `rxgrep.c`.
 
 Development of this matcher also benefitted immensely from a POSIX regular
 expression test suite developed by Douglas McIlroy, Glenn Fowler, and others.
