@@ -30,13 +30,14 @@ bracket expressions to be expressed in a way independent of character
 set and character encoding.
 
 In order to fully support international locales, the core algorithms
-of MinRX operate on Unicode code points.  MinRX uses the C standard
-multibyte-to-wide conversion functions to to transform input to its
-internal representation.  Right now MinRX processes every input character
-through `mbrtowc()`, which is typically slow.  As development progresses
-MinRX will add fast(er) paths for the cases where the input is encoded
-in a 1-byte character set, or where the input is known to be encoded
-in UTF-8.
+of MinRX operate on 32-bit wide characters, loosely assumed to contain
+Unicode code points.  In UTF-8 `LC_CTYPE` locales, MinRX uses its own
+custom code to convert the input to 32-bit codepoint values.  In non-UTF-8
+locales, MinRX uses the C99 `mbrtowc()` function to transform input to
+its internal representation.  It is implementation-dependent whether
+`mbrtowc()` translates to Unicode code points (under GNU `libc` it does).
+MinRX also has an option to force the use of native encoding in 1-byte
+`LC_CTYPE` locales.
 
 MinRX is a non-backtracking matcher: it makes a single forward scan
 through the search text, one character at a time, and considers all
@@ -59,8 +60,8 @@ A detailed description of MinRX's algorithm can be found in [ALGORITHM.txt](ALGO
 
 ## Features
 
-MinRX is a nearly-feature-complete implementation of POSIX EREs, with
-just two caveats that I'm aware of:
+MinRX is a nearly-feature-complete implementation of POSIX 2018 EREs,
+with just two caveats that I'm aware of:
 
 * The `[. .]` syntax inside bracket expressions for "collating element
   names" is only partially implemented.  MinRX supports use of `[. .]`
@@ -75,17 +76,17 @@ just two caveats that I'm aware of:
   to the necessary locale information.
 
 MinRX also provides a few BSD extensions (`\< \>`) and GNU extensions
-(<code>\\` \\' \b \B \s \S \w \W</code>) that can be optionally enabled via flag
-passed at regexp compile time, as well as a few syntax compatibility
-options needed to enable use in Gawk.
+(<code>\\` \\' \b \B \s \S \w \W</code>) that can be optionally enabled
+via flags passed at regexp compile time, as well as a few syntax compatibility
+options needed to enable use in GNU `awk`.
 
 ## Installation
 
-A `meson` build has been contributed by shenleban tongying.  The included
+The build system is a mix of GNU `make` and `meson`.  The included
 GNU `Makefile` provides targets `compile`, `install`, and `uninstall` that
 invoke the `meson` build, e.g. `make PREFIX=/some/dir install`.
 
-There are two test program `rxgrep` and `tryit` that are built
+There are two test program `rxgrep` and `tryit` that are also built
 by `make compile`. These will print usage messages if invoked
 with no arguments.  (These are not installed by `make install`).
 
@@ -113,17 +114,24 @@ the MinRX matcher itself is currently slow.
 My current development focus is correctness.  I'm hoping the public will
 thoroughly exercise this matcher and bury me in a deluge of bug reports. :-)
 
-At some point I will switch focus to performance.  Planned work:
+At some point I will switch focus to performance and portability.
 
-* Faster support for well-known input encodings like UTF-8.
+Currently planned work:
 
 * "First character" optimization to speed up initial search.
+
+* Implement POSIX 2024 non-greedy repetition operators.
+
+* Improve support for POSIX bracket expression collating elements
+  and implement POSIX bracket expression equivalence classes.
 
 * Possibly a caching-DFA-like optimization: The MinRX SNFA automaton,
   with its stack of arbitrary integers, does not in general correspond
   to any deterministic *finite* automaton, but it is equivalent to a
   "deterministic *infinite* automaton", and it might be feasible to cache
   a useful working subset of this infinite automaton's states.
+
+* Rewrite in C for improved portability.
 
 ## License
 
@@ -144,8 +152,10 @@ under its own license, the text of which can be found in that file.
 ## Acknowledgements
 
 Arnold Robbins pestered me for years to write this matcher, and enthusiastically
-tested numerous early versions of it with Gawk.
-He contributed the manual page and `rxgrep.c`.
+tested numerous early versions of it with GNU `awk`.
+He contributed the manual page and the `rxgrep` program.
+
+The `meson` build was contributed by shenleban tongying.
 
 Development of this matcher also benefitted immensely from a POSIX regular
 expression test suite developed by Douglas McIlroy, Glenn Fowler, and others.
