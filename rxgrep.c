@@ -148,18 +148,18 @@ process(const char *filename, FILE *fp)
 	static char *buf = NULL;
 	static size_t n = 0;
 	int fcount = 0;
-	size_t nbytes;
+	int nbytes;
 	int line_number;
 
 	for (line_number = 1; (nbytes = getline(& buf, & n, fp)) != EOF; line_number++) {
 		bool matches = false;
-		size_t len = strlen(buf);
+		ptrdiff_t len = strlen(buf);
 		minrx_regmatch_t rm;
 
 		if (buf[len-1] == '\n')
 			len--;
 
-		for (int i = 0; i < num_regexps; i++) {
+		for (size_t i = 0; i < num_regexps; i++) {
 			rm.rm_so = rm.rm_eo = 0;
 
 			if (minrx_regexec(& regexps[i], buf, 1, & rm, 0) == 0) {
@@ -460,7 +460,7 @@ build_pattern_list(char *pattern_list)
 static void
 build_regexps(char **pattern_list)
 {
-	int i;
+	size_t i;
 
 	regexps = (minrx_regex_t *) malloc(num_regexps * sizeof(minrx_regex_t));
 	if (regexps == NULL) {

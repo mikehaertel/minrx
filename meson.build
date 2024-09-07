@@ -12,6 +12,7 @@ libminrx_dep = declare_dependency(
     link_with : libminrx_lib,
     include_directories : libminrx_inc)
 
+executable('rxgrep', 'rxgrep.c', dependencies : [libminrx_dep])
 executable('tryit', 'tryit.c', dependencies : [libminrx_dep])
 
 install_headers('minrx.h')
