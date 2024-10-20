@@ -8,6 +8,7 @@ TYPE=release
 compile install:: builds/$(TYPE)/meson-info
 	cd builds/$(TYPE) && meson $@
 compile::
+	ln -sf builds/$(TYPE)/rxgrep .
 	ln -sf builds/$(TYPE)/tryit .
 uninstall: builds/$(TYPE)/meson-info
 	cd builds/$(TYPE) && ninja $@
