@@ -439,6 +439,10 @@ struct Compile {
 	WConv wconv;
 	std::vector<CSet> csets;
 	std::optional<std::size_t> dot;
+	std::optional<std::size_t> esc_s;
+	std::optional<std::size_t> esc_S;
+	std::optional<std::size_t> esc_w;
+	std::optional<std::size_t> esc_W;
 	std::map<WChar, unsigned int> icmap;
 	NInt nsub = 0;
 	Compile(WConv::Encoding e, const char *bp, const char *ep, minrx_regcomp_flags_t flags): flags(flags), enc(e), wconv(e, bp, ep) { wconv.nextchr(); }
@@ -884,34 +888,46 @@ struct Compile {
 			case L's':
 				if ((flags & MINRX_REG_EXTENSIONS_GNU) == 0)
 					goto normal;
-				lhs.push_back({Node::CSet, {csets.size(), 0}, nstk});
-				csets.emplace_back();
-				cclass(csets.back(), "space");
+				if (!esc_s.has_value()) {
+					esc_s = csets.size();
+					csets.emplace_back();
+					cclass(csets.back(), "space");
+				}
+				lhs.push_back({Node::CSet, {*esc_s, 0}, nstk});
 				break;
 			case L'S':
 				if ((flags & MINRX_REG_EXTENSIONS_GNU) == 0)
 					goto normal;
-				lhs.push_back({Node::CSet, {csets.size(), 0}, nstk});
-				csets.emplace_back();
-				cclass(csets.back(), "space");
-				csets.back().invert();
+				if (!esc_S.has_value()) {
+					esc_S = csets.size();
+					csets.emplace_back();
+					cclass(csets.back(), "space");
+					csets.back().invert();
+				}
+				lhs.push_back({Node::CSet, {*esc_S, 0}, nstk});
 				break;
 			case L'w':
 				if ((flags & MINRX_REG_EXTENSIONS_GNU) == 0)
 					goto normal;
-				lhs.push_back({Node::CSet, {csets.size(), 0}, nstk});
-				csets.emplace_back();
-				cclass(csets.back(), "alnum");
-				csets.back().set(L'_');
+				if (!esc_w.has_value()) {
+					esc_w = csets.size();
+					csets.emplace_back();
+					cclass(csets.back(), "alnum");
+					csets.back().set(L'_');
+				}
+				lhs.push_back({Node::CSet, {*esc_w, 0}, nstk});
 				break;
 			case L'W':
 				if ((flags & MINRX_REG_EXTENSIONS_GNU) == 0)
 					goto normal;
-				lhs.push_back({Node::CSet, {csets.size(), 0}, nstk});
-				csets.emplace_back();
-				cclass(csets.back(), "alnum");
-				csets.back().set(L'_');
-				csets.back().invert();
+				if (!esc_W.has_value()) {
+					esc_W = csets.size();
+					csets.emplace_back();
+					cclass(csets.back(), "alnum");
+					csets.back().set(L'_');
+					csets.back().invert();
+				}
+				lhs.push_back({Node::CSet, {*esc_W, 0}, nstk});
 				break;
 			case WConv::End:
 				return {{}, 0, MINRX_REG_EESCAPE};
