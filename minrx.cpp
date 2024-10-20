@@ -266,6 +266,7 @@ public:
 	: nextfn(nextfns[(int) e]), bp(bp), ep(ep), cp(bp) {
 		std::memset(&mbs, 0, sizeof mbs);
 	}
+	WConv(Encoding e, const char *bp): WConv(e, bp, bp + std::strlen(bp)) { }
 	auto look() const { return wch; }
 	auto lookahead() const { return WConv(*this).nextchr().look(); }
 	WConv &nextchr() { return (this->*nextfn)(); }
@@ -353,6 +354,8 @@ public:
 WConv &(WConv::*const WConv::nextfns[3])() = { &WConv::nextbyte, &WConv::nextmbtowc, &WConv::nextutf8 };
 
 struct CSet {
+	static std::map<std::string, CSet> cclmemo;
+	static std::mutex cclmutex;
 	struct Range {
 		Range(WChar x, WChar y): min(std::min(x, y)), max(std::max(x, y)) {}
 		WChar min, max;
@@ -392,7 +395,145 @@ struct CSet {
 		auto i = ranges.lower_bound(Range(wc, wc));
 		return inverted ^ (i != ranges.end() && wc >= i->min && wc <= i->max);
 	}
+	bool cclass(minrx_regcomp_flags_t flags, WConv::Encoding enc, const std::string &name) {
+		auto wct = std::wctype(name.c_str());
+		if (wct) {
+			std::string key = name + ":" + std::setlocale(LC_CTYPE, NULL) + ":" + ((flags & MINRX_REG_ICASE) != 0 ? "1" : "0");
+			std::lock_guard<std::mutex> lock(cclmutex);
+			auto i = cclmemo.find(key);
+			if (i == cclmemo.end()) {
+				if (enc == WConv::Encoding::Byte)
+					for (WChar b = 0; b <= 0xFF; ++b) {
+						if (std::iswctype(std::btowc(b), wct)) {
+							set(b);
+							if ((flags & MINRX_REG_ICASE) != 0) {
+								set(std::tolower(b));
+								set(std::toupper(b));
+							}
+						}
+					}
+				else
+					for (WChar wc = 0; wc <= WCharMax; ++wc) {
+						if (std::iswctype(wc, wct)) {
+							set(wc);
+							if ((flags & MINRX_REG_ICASE) != 0) {
+								set(std::towlower(wc));
+								set(std::towupper(wc));
+							}
+						}
+					}
+				cclmemo.emplace(key, *this);
+				i = cclmemo.find(key);
+			}
+			*this |= i->second; // N.B. could probably be safely outside the critical section, since cclmemo entries are never deleted
+			return true;
+		}
+		return false;
+	}
+	minrx_result_t parse(minrx_regcomp_flags_t flags, WConv::Encoding enc, WConv &wconv) {
+		auto wc = wconv.nextchr().look();
+		bool inv = wc == L'^';
+		if (inv)
+			wc = wconv.nextchr().look();
+		for (bool first = true;; first = false) {
+			auto wclo = wc, wchi = wc;
+			if (wclo == WConv::End)
+				return MINRX_REG_EBRACK;
+			wc = wconv.nextchr().look();
+			if (wclo == L']' && !first)
+				break;
+			if (wclo == L'\\' && (flags & MINRX_REG_BRACK_ESCAPE) != 0) {
+				if (wc != WConv::End) {
+					wclo = wchi = wc;
+					wc = wconv.nextchr().look();
+				} else {
+					return MINRX_REG_EESCAPE;
+				}
+			} else if (wclo == L'[') {
+				if (wc == L'.') {
+					wc = wconv.nextchr().look();
+					wclo = wchi = wc;
+					wc = wconv.nextchr().look();
+					if (wc != L'.' || (wc = wconv.nextchr().look() != L']'))
+						return MINRX_REG_ECOLLATE;
+				} else if (wc == L':') {
+					wconv.nextchr();
+					auto bp = wconv.ptr();
+					while (wconv.look() != WConv::End && wconv.look() != L':')
+						wconv.nextchr();
+					if (wconv.look() != L':')
+						return MINRX_REG_ECTYPE;
+					auto ep = wconv.ptr();
+					wconv.nextchr();
+					if (wconv.look() != L']')
+						return MINRX_REG_ECTYPE;
+					wc = wconv.nextchr().look();
+					auto cclname = std::string(bp, ep);
+					if (cclass(flags, enc, cclname))
+						continue;
+					return MINRX_REG_ECTYPE;
+				} else if (wc == L'=') {
+					// FIXME: recognize some equivalence classes.
+					return MINRX_REG_ECOLLATE;
+				}
+			}
+			bool range = false;
+			if (wc == L'-') {
+				auto save = wconv.save();
+				wc = wconv.nextchr().look();
+				if (wc == WConv::End)
+					return MINRX_REG_EBRACK;
+				if (wc != L']') {
+					wchi = wc;
+					wc = wconv.nextchr().look();
+					if (wchi == L'\\' && (flags & MINRX_REG_BRACK_ESCAPE) != 0) {
+						if (wc != WConv::End) {
+							wchi = wc;
+							wc = wconv.nextchr().look();
+						} else {
+							return MINRX_REG_EESCAPE;
+						}
+					} else if (wchi == L'[') {
+						if (wc == L'.') {
+							wchi = wconv.nextchr().look();
+							wc = wconv.nextchr().look();
+							if (wc != L'.' || (wc = wconv.nextchr().look()) != L']')
+								return MINRX_REG_ECOLLATE;
+							wc = wconv.nextchr().look();
+						} else if (wc == L':' || wc == L'=') {
+							return MINRX_REG_ERANGE; // can't be range endpoint
+						}
+					}
+					range = true;
+				} else {
+					wconv.restore(save);
+					wc = L'-';
+				}
+			}
+			if (wclo > wchi || (wclo != wchi && (wclo < 0 || wchi < 0)))
+				return MINRX_REG_ERANGE;
+			if (wclo >= 0) {
+				set(wclo, wchi);
+				if ((flags & MINRX_REG_ICASE) != 0)
+					for (auto wc = wclo; wc <= wchi; ++wc) {
+						set(enc == WConv::Encoding::Byte ? std::tolower(wc) : std::towlower(wc));
+						set(enc == WConv::Encoding::Byte ? std::toupper(wc) : std::towupper(wc));
+					}
+			}
+			if (range && wc == L'-' && wconv.lookahead() != L']')
+				return MINRX_REG_ERANGE;
+		}
+		if (inv) {
+			if ((flags & MINRX_REG_NEWLINE) != 0)
+				set(L'\n');
+			invert();
+		}
+		return MINRX_REG_SUCCESS;
+	}
 };
+
+std::map<std::string, CSet> CSet::cclmemo;
+std::mutex CSet::cclmutex;
 
 typedef std::size_t NInt;
 
@@ -446,44 +587,6 @@ struct Compile {
 	std::map<WChar, unsigned int> icmap;
 	NInt nsub = 0;
 	Compile(WConv::Encoding e, const char *bp, const char *ep, minrx_regcomp_flags_t flags): flags(flags), enc(e), wconv(e, bp, ep) { wconv.nextchr(); }
-	static std::map<std::string, CSet> cclmemo;
-	static std::mutex cclmutex;
-	bool cclass(CSet &cs, const std::string &name) {
-		auto wct = std::wctype(name.c_str());
-		if (wct) {
-			std::string key = name + ":" + std::setlocale(LC_CTYPE, NULL) + ":" + ((flags & MINRX_REG_ICASE) != 0 ? "1" : "0");
-			std::lock_guard<std::mutex> lock(cclmutex);
-			auto i = cclmemo.find(key);
-			if (i == cclmemo.end()) {
-				CSet cs;
-				if (enc == WConv::Encoding::Byte)
-					for (WChar b = 0; b <= 0xFF; ++b) {
-						if (std::iswctype(std::btowc(b), wct)) {
-							cs.set(b);
-							if ((flags & MINRX_REG_ICASE) != 0) {
-								cs.set(std::tolower(b));
-								cs.set(std::toupper(b));
-							}
-						}
-					}
-				else
-					for (WChar wc = 0; wc <= WCharMax; ++wc) {
-						if (std::iswctype(wc, wct)) {
-							cs.set(wc);
-							if ((flags & MINRX_REG_ICASE) != 0) {
-								cs.set(std::towlower(wc));
-								cs.set(std::towupper(wc));
-							}
-						}
-					}
-				cclmemo.emplace(key, cs);
-				i = cclmemo.find(key);
-			}
-			cs |= i->second; // N.B. could probably be safely outside the critical section, since cclmemo entries are never deleted
-			return true;
-		}
-		return false;
-	}
 	bool num(NInt &n) {
 		auto satmul = [](NInt x, NInt y) -> NInt {
 			return (x == 0 || y == 0) ? 0 : ((x * y / x == y) ? x * y : -1);
@@ -725,109 +828,10 @@ struct Compile {
 		case L'?':
 			return {{}, 0, MINRX_REG_BADRPT};
 		case L'[':
-			{
-				lhmaxstk = nstk;
-				wc = wconv.nextchr().look();
-				bool invert = wc == L'^';
-				if (invert)
-					wc = wconv.nextchr().look();
-				CSet cs;
-				for (bool first = true;; first = false) {
-					auto wclo = wc, wchi = wc;
-					if (wclo == WConv::End)
-						return {{}, 0, MINRX_REG_EBRACK};
-					wc = wconv.nextchr().look();
-					if (wclo == L']' && !first)
-						break;
-					if (wclo == L'\\' && (flags & MINRX_REG_BRACK_ESCAPE) != 0) {
-						if (wc != WConv::End) {
-							wclo = wchi = wc;
-							wc = wconv.nextchr().look();
-						} else {
-							return {{}, 0, MINRX_REG_EESCAPE};
-						}
-					} else if (wclo == L'[') {
-						if (wc == L'.') {
-							wc = wconv.nextchr().look();
-							wclo = wchi = wc;
-							wc = wconv.nextchr().look();
-							if (wc != L'.' || (wc = wconv.nextchr().look() != L']'))
-								return {{}, 0, MINRX_REG_ECOLLATE};
-						} else if (wc == L':') {
-							wconv.nextchr();
-							auto bp = wconv.ptr();
-							while (wconv.look() != WConv::End && wconv.look() != L':')
-								wconv.nextchr();
-							if (wconv.look() != L':')
-								return {{}, 0, MINRX_REG_ECTYPE};
-							auto ep = wconv.ptr();
-							wconv.nextchr();
-							if (wconv.look() != L']')
-								return {{}, 0, MINRX_REG_ECTYPE};
-							wc = wconv.nextchr().look();
-							auto cclname = std::string(bp, ep);
-							if (cclass(cs, cclname))
-								continue;
-							return {{}, 0, MINRX_REG_ECTYPE};
-						} else if (wc == L'=') {
-							// FIXME: recognize some equivalence classes.
-							return {{}, 0, MINRX_REG_ECOLLATE};
-						}
-					}
-					bool range = false;
-					if (wc == L'-') {
-						auto save = wconv.save();
-						wc = wconv.nextchr().look();
-						if (wc == WConv::End)
-							return {{}, 0, MINRX_REG_EBRACK};
-						if (wc != L']') {
-							wchi = wc;
-							wc = wconv.nextchr().look();
-							if (wchi == L'\\' && (flags & MINRX_REG_BRACK_ESCAPE) != 0) {
-								if (wc != WConv::End) {
-									wchi = wc;
-									wc = wconv.nextchr().look();
-								} else {
-									return {{}, 0, MINRX_REG_EESCAPE};
-								}
-							} else if (wchi == L'[') {
-								if (wc == L'.') {
-									wchi = wconv.nextchr().look();
-									wc = wconv.nextchr().look();
-									if (wc != L'.' || (wc = wconv.nextchr().look()) != L']')
-										return {{}, 0, MINRX_REG_ECOLLATE};
-									wc = wconv.nextchr().look();
-								} else if (wc == L':' || wc == L'=') {
-									return {{}, 0, MINRX_REG_ERANGE}; // can't be range endpoint
-								}
-							}
-							range = true;
-						} else {
-							wconv.restore(save);
-							wc = L'-';
-						}
-					}
-					if (wclo > wchi || (wclo != wchi && (wclo < 0 || wchi < 0)))
-						return {{}, 0, MINRX_REG_ERANGE};
-					if (wclo >= 0) {
-						cs.set(wclo, wchi);
-						if ((flags & MINRX_REG_ICASE) != 0)
-							for (auto wc = wclo; wc <= wchi; ++wc) {
-								cs.set(enc == WConv::Encoding::Byte ? std::tolower(wc) : std::towlower(wc));
-								cs.set(enc == WConv::Encoding::Byte ? std::toupper(wc) : std::towupper(wc));
-							}
-					}
-					if (range && wc == L'-' && wconv.lookahead() != L']')
-						return {{}, 0, MINRX_REG_ERANGE};
-				}
-				lhs.push_back({Node::CSet, {csets.size(), 0}, nstk});
-				if (invert) {
-					if ((flags & MINRX_REG_NEWLINE) != 0)
-						cs.set(L'\n');
-					cs.invert();
-				}
-				csets.emplace_back(cs);
-			}
+			lhmaxstk = nstk;
+			lhs.push_back({Node::CSet, {csets.size(), 0}, nstk});
+			if (auto err = csets.emplace_back().parse(flags, enc, wconv))
+				return {{}, 0, err};
 			break;
 		case L'.':
 			if (!dot.has_value()) {
@@ -890,8 +894,8 @@ struct Compile {
 					goto normal;
 				if (!esc_s.has_value()) {
 					esc_s = csets.size();
-					csets.emplace_back();
-					cclass(csets.back(), "space");
+					WConv wc(enc, "[[:space:]]");
+					csets.emplace_back().parse(flags, enc, wc.nextchr());
 				}
 				lhs.push_back({Node::CSet, {*esc_s, 0}, nstk});
 				break;
@@ -900,9 +904,8 @@ struct Compile {
 					goto normal;
 				if (!esc_S.has_value()) {
 					esc_S = csets.size();
-					csets.emplace_back();
-					cclass(csets.back(), "space");
-					csets.back().invert();
+					WConv wc(enc, "[^[:space:]]");
+					csets.emplace_back().parse(flags, enc, wc.nextchr());
 				}
 				lhs.push_back({Node::CSet, {*esc_S, 0}, nstk});
 				break;
@@ -911,9 +914,8 @@ struct Compile {
 					goto normal;
 				if (!esc_w.has_value()) {
 					esc_w = csets.size();
-					csets.emplace_back();
-					cclass(csets.back(), "alnum");
-					csets.back().set(L'_');
+					WConv wc(enc, "[[:alnum:]_]");
+					csets.emplace_back().parse(flags, enc, wc.nextchr());
 				}
 				lhs.push_back({Node::CSet, {*esc_w, 0}, nstk});
 				break;
@@ -922,10 +924,8 @@ struct Compile {
 					goto normal;
 				if (!esc_W.has_value()) {
 					esc_W = csets.size();
-					csets.emplace_back();
-					cclass(csets.back(), "alnum");
-					csets.back().set(L'_');
-					csets.back().invert();
+					WConv wc(enc, "[^[:alnum:]_]");
+					csets.emplace_back().parse(flags, enc, wc.nextchr());
 				}
 				lhs.push_back({Node::CSet, {*esc_W, 0}, nstk});
 				break;
@@ -975,9 +975,6 @@ struct Compile {
 		return new Regexp{ std::move(csets), {lhs.begin(), lhs.end()}, nstk, nsub + 1, enc, err };
 	}
 };
-
-std::map<std::string, CSet> Compile::cclmemo;
-std::mutex Compile::cclmutex;
 
 struct Execute {
 	typedef COWVec<std::size_t, (std::size_t) -1> Vec;
