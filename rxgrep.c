@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include <getopt.h>
+#include <regex.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,7 +35,7 @@
 
 #include "minrx.h"
 
-#define VERSION		"0.1"
+#define VERSION		"0.2"
 #define COPYRIGHT_YEAR	2024
 
 /* The name the program was invoked under, for error messages */
@@ -51,14 +52,18 @@ int print_output = true;
 int wholelines = false;
 int word_match = false;
 #define PRINT_HELP	1
+#define USE_LIBC_REGEX	2
 
-char *pattern = NULL;		// command line pattern(s)
-char *pat_file = NULL;		// file with patterns
-minrx_regex_t *regexps = NULL;	// array of compiled regexps
+char *pattern = NULL;			// command line pattern(s)
+char *pat_file = NULL;			// file with patterns
+minrx_regex_t *minrx_regexps = NULL;	// array of compiled regexps
+regex_t *regexps = NULL;		// array of compiled regexps
 size_t num_regexps;		// how many we actually have
+int minrx_syntax_flags;		// how to do the matching
 int syntax_flags;		// how to do the matching
 
 bool do_filenames = false;	// include filename in output
+bool use_minrx = true;		// false if USE_LIBC_REGEX
 size_t total;
 
 static void parse_args(int argc, char **argv);
@@ -68,7 +73,9 @@ static void version(void);
 static char **get_patterns(const char *filename);
 static char **build_pattern_list(char *pattern_list);
 static void build_regexps(char **pattern_list);
+static void build_libc_regexps(char **pattern_list);
 static void process(const char *filename, FILE *fp);
+static void libc_process(const char *filename, FILE *fp);
 static void set_syntax_flags(void);
 
 
@@ -94,28 +101,54 @@ main(int argc, char **argv)
 	} else
 		pattern_list = build_pattern_list(pattern);
 
-	build_regexps(pattern_list);
+	if (use_minrx)
+		build_regexps(pattern_list);
+	else
+		build_libc_regexps(pattern_list);
 
 	if (argc - optind > 1)
 		do_filenames = true;
 
-	if (optind >= argc)
-		process("(standard input)", stdin);
-	else {
-		for (i = optind; i < argc; i++) {
-			if (strcmp(argv[i], "-") == 0)
-				process("(standard input)", stdin);
-			else {
-				FILE *fp = fopen(argv[i], "r");
+	if (use_minrx) {
+		if (optind >= argc)
+			process("(standard input)", stdin);
+		else {
+			for (i = optind; i < argc; i++) {
+				if (strcmp(argv[i], "-") == 0)
+					process("(standard input)", stdin);
+				else {
+					FILE *fp = fopen(argv[i], "r");
 
-				if (fp == NULL) {
-					if (print_errors)
-						fprintf(stderr, "%s: %s: could not open: %s\n",
-							myname, argv[i], strerror(errno));
-					continue;
+					if (fp == NULL) {
+						if (print_errors)
+							fprintf(stderr, "%s: %s: could not open: %s\n",
+								myname, argv[i], strerror(errno));
+						continue;
+					}
+					process(argv[i], fp);
+					fclose(fp);
 				}
-				process(argv[i], fp);
-				fclose(fp);
+			}
+		}
+	} else {
+		if (optind >= argc)
+			libc_process("(standard input)", stdin);
+		else {
+			for (i = optind; i < argc; i++) {
+				if (strcmp(argv[i], "-") == 0)
+					libc_process("(standard input)", stdin);
+				else {
+					FILE *fp = fopen(argv[i], "r");
+
+					if (fp == NULL) {
+						if (print_errors)
+							fprintf(stderr, "%s: %s: could not open: %s\n",
+								myname, argv[i], strerror(errno));
+						continue;
+					}
+					libc_process(argv[i], fp);
+					fclose(fp);
+				}
 			}
 		}
 	}
@@ -128,16 +161,24 @@ main(int argc, char **argv)
 static void
 set_syntax_flags(void)
 {
-	syntax_flags = MINRX_REG_EXTENDED	// default is EREs
-		| MINRX_REG_NOSUB		// don't need submatch info
-		| MINRX_REG_NEWLINE		// \n isn't matched
-		| MINRX_REG_BRACE_COMPAT	// { not followed by digit isn't special
-		| MINRX_REG_EXTENSIONS_BSD	// \< and \>
-		| MINRX_REG_EXTENSIONS_GNU	// \b \B \s \S \w \W
-		| MINRX_REG_NATIVE1B;		// All bytes are valid in a single byte locale
+	if (use_minrx) {
+		minrx_syntax_flags = MINRX_REG_EXTENDED	// default is EREs
+			| MINRX_REG_NOSUB		// don't need submatch info
+			| MINRX_REG_NEWLINE		// \n isn't matched
+			| MINRX_REG_BRACE_COMPAT	// { not followed by digit isn't special
+			| MINRX_REG_EXTENSIONS_BSD	// \< and \>
+			| MINRX_REG_EXTENSIONS_GNU	// \b \B \s \S \w \W
+			| MINRX_REG_NATIVE1B;		// All bytes are valid in a single byte locale
 
-	if (ignorecase)
-		syntax_flags |= MINRX_REG_ICASE;	// Ignore case (duh)
+		if (ignorecase)
+			minrx_syntax_flags |= MINRX_REG_ICASE;	// Ignore case (duh)
+	} else {
+		syntax_flags = REG_EXTENDED
+			| REG_NOSUB
+			| REG_NEWLINE;
+		if (ignorecase)
+			syntax_flags |= REG_ICASE;
+	}
 }
 
 /* process --- look for matches */
@@ -162,7 +203,82 @@ process(const char *filename, FILE *fp)
 		for (size_t i = 0; i < num_regexps; i++) {
 			rm.rm_so = rm.rm_eo = 0;
 
-			if (minrx_regexec(& regexps[i], buf, 1, & rm, 0) == 0) {
+			if (minrx_regexec(& minrx_regexps[i], buf, 1, & rm, 0) == 0) {
+				matches = true;
+				if (matches && wholelines && (rm.rm_so != 0 || rm.rm_eo != len))
+					matches = false;
+
+			}
+
+			if (invert)
+			        matches = ! matches;
+
+			fcount += !! matches;	// 1 or 0
+
+			if (! matches)
+				continue;
+
+			// at this point we have a match
+			if (! do_count) {
+				if (! print_output)
+					goto out;
+
+				if (list_files) {
+					printf("%s\n", filename);
+					goto out;
+				}
+
+				if (do_filenames) {
+					if (print_num)
+						printf("%s:%d:%s", filename, line_number, buf);
+					else
+						printf("%s:%s", filename, buf);
+				} else if (print_num)
+					printf("%d:%s", line_number, buf);
+				else
+					printf("%s", buf);
+
+				if (buf[len] != '\n')	// in case last line doesn't have newline
+					putchar('\n');
+			}
+			break;	// after any match, get the next line
+		}
+	}
+
+	if (print_output && do_count) {
+		if (list_files)
+			printf("%s:%d\n", filename, fcount);
+		else
+			printf("%d\n", fcount);
+	}
+
+out:
+	total += fcount;
+}
+
+/* libc_process --- look for matches */
+
+static void
+libc_process(const char *filename, FILE *fp)
+{
+	static char *buf = NULL;
+	static size_t n = 0;
+	int fcount = 0;
+	int nbytes;
+	int line_number;
+
+	for (line_number = 1; (nbytes = getline(& buf, & n, fp)) != EOF; line_number++) {
+		bool matches = false;
+		ptrdiff_t len = strlen(buf);
+		regmatch_t rm;
+
+		if (buf[len-1] == '\n')
+			len--;
+
+		for (size_t i = 0; i < num_regexps; i++) {
+			rm.rm_so = rm.rm_eo = 0;
+
+			if (regexec(& regexps[i], buf, 1, & rm, 0) == 0) {
 				matches = true;
 				if (matches && wholelines && (rm.rm_so != 0 || rm.rm_eo != len))
 					matches = false;
@@ -236,6 +352,7 @@ parse_args(int argc, char **argv)
 		{ "help",		no_argument,		NULL,	PRINT_HELP },
 		{ "ignore-case",	no_argument,		& ignorecase,	'i' },
 		{ "invert-match",	no_argument,		& invert,	'v' },
+		{ "libc-regex",		no_argument,		NULL,	USE_LIBC_REGEX },
 		{ "line-number",	no_argument,		&print_num,	'n' },
 		{ "line-regexp",	no_argument,		& wholelines,	'x' },
 		{ "no-messages",	no_argument,		NULL,		's' },
@@ -293,6 +410,9 @@ parse_args(int argc, char **argv)
 		case 'V':
 			version();	// exits
 			break;
+		case USE_LIBC_REGEX:
+			use_minrx = false;
+			break;
 		case PRINT_HELP:
 			usage(EXIT_SUCCESS);
 			break;
@@ -329,6 +449,7 @@ usage(int exit_status)
 		/*	"\t-w, --word-regexp\t\tPattern must match a whole word\n" */
 			"\t-x, --line-regexp\t\tOnly print if the whole line matches\n"
 			"\t-V, --version\t\t\tPrint program version\n"
+			"\t--libc-regex\t\t\tUse <regex.h> functions from libc\n"
 			"\t--help\t\t\t\tPrint this help\n",
 		myname);
 	exit(exit_status);
@@ -462,7 +583,36 @@ build_regexps(char **pattern_list)
 {
 	size_t i;
 
-	regexps = (minrx_regex_t *) malloc(num_regexps * sizeof(minrx_regex_t));
+	minrx_regexps = (minrx_regex_t *) malloc(num_regexps * sizeof(minrx_regex_t));
+	if (minrx_regexps == NULL) {
+		if (print_errors)
+			fprintf(stderr, "%s: out of memory: %s\n", myname, strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+
+	for (i = 0; i < num_regexps; i++) {
+		int error = minrx_regcomp(& minrx_regexps[i], pattern_list[i], minrx_syntax_flags);
+		if (error != MINRX_REG_SUCCESS) {
+			if (print_errors) {
+				char errbuf[BUFSIZ];
+
+				minrx_regerror(error, & minrx_regexps[i], errbuf, sizeof(errbuf));
+				fprintf(stderr, "%s:pattern %s: %s\n", myname, pattern_list[i], errbuf);
+			}
+
+			exit(EXIT_FAILURE);
+		}
+	}
+}
+
+/* build_libc_regexps --- compile the patterns into libc regexp objects */
+
+static void
+build_libc_regexps(char **pattern_list)
+{
+	size_t i;
+
+	regexps = (regex_t *) malloc(num_regexps * sizeof(regex_t));
 	if (regexps == NULL) {
 		if (print_errors)
 			fprintf(stderr, "%s: out of memory: %s\n", myname, strerror(errno));
@@ -470,12 +620,12 @@ build_regexps(char **pattern_list)
 	}
 
 	for (i = 0; i < num_regexps; i++) {
-		int error = minrx_regcomp(& regexps[i], pattern_list[i], syntax_flags);
-		if (error != MINRX_REG_SUCCESS) {
+		int error = regcomp(& regexps[i], pattern_list[i], syntax_flags);
+		if (error != 0) {
 			if (print_errors) {
 				char errbuf[BUFSIZ];
 
-				minrx_regerror(error, & regexps[i], errbuf, sizeof(errbuf));
+				regerror(error, & regexps[i], errbuf, sizeof(errbuf));
 				fprintf(stderr, "%s:pattern %s: %s\n", myname, pattern_list[i], errbuf);
 			}
 
