@@ -86,7 +86,7 @@ The build system is a mix of GNU `make` and `meson`.  The included
 GNU `Makefile` provides targets `compile`, `install`, and `uninstall` that
 invoke the `meson` build, e.g. `make PREFIX=/some/dir install`.
 
-There are two test program `rxgrep` and `tryit` that are also built
+There are two test programs `rxgrep` and `tryit` that are also built
 by `make compile`. These will print usage messages if invoked
 with no arguments.  (These are not installed by `make install`).
 
