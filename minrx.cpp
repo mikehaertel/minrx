@@ -36,9 +36,9 @@
 #include <string>
 #include <tuple>
 #include <vector>
-#ifdef SETSEARCH
+#ifdef CHARSET
 #include <memory>
-#include "bracketexpr.h"
+#include "charset.h"
 #endif
 #include "minrx.h"
 
@@ -251,7 +251,7 @@ struct QVec {
 typedef int32_t WChar;			// because wchar_t may not be 32 bits
 constexpr int32_t WCharMax = 0x10FFFF;	// maximum code point: valid for Unicode and (FIXME!) blithely assumed for non-Unicode
 class WConv {
-#ifdef SETSEARCH
+#ifdef CHARSET
 	friend class CSet;
 #endif
 public:
@@ -360,37 +360,54 @@ public:
 WConv &(WConv::*const WConv::nextfns[3])() = { &WConv::nextbyte, &WConv::nextmbtowc, &WConv::nextutf8 };
 
 struct CSet {
-#ifdef SETSEARCH
-	const BRACKET_EXPR *brexp = nullptr;
-	CSet() = default;
+#ifdef CHARSET
+	const charset_t charset = nullptr;
+	int errcode;
+	CSet() {
+		int csflags = 0;
+		if (flags & MINRX_REG_NEWLINE) {
+			csflags |= CSET_NO_NEWLINES;
+		}
+		charset = charset_create(csflags, & errcode);
+		// FIXME: Throw error if charset == nullptr
+	}
 	CSet(const CSet &) = delete;
 	CSet &operator=(const CSet &) = delete;
-	CSet(CSet &&cs): brexp(cs.brexp) { cs.brexp = nullptr; }
-	CSet &operator=(CSet &&cs) { brexp = cs.brexp; cs.brexp = nullptr; return *this; }
-	~CSet() { if (brexp) { bracket_expr_free(brexp); brexp = nullptr; } }
-	bool test(WChar wc) const { return bracket_expr_match(brexp, wc, wc >= 0); }
+	CSet(CSet &&cs): brexp(cs.charset) { cs.charset = nullptr; }
+	CSet &operator=(CSet &&cs) { charset = cs.charset; cs.charset = nullptr; return *this; }
+	~CSet() { if (charset) { charset_free(charset); charset = nullptr; } }
+	bool test(WChar wc) const { return wc >= 0 ? charset_in_set(charset, wc, & errcode) : false; }
+	CSet &invert() {
+		charset_invert(charset, & errcode); // FIXME: no error checking
+		return *this;
+	}
 	minrx_result_t parse(minrx_regcomp_flags_t flags, WConv::Encoding enc, std::size_t mbmax, WConv &wconv) {
-		char errbuf[64];
-		int ssflags = SS_DOT;
-		if (flags & MINRX_REG_ICASE)
-			ssflags |= SS_IGNORE_CASE;
-		if (flags & MINRX_REG_BRACK_ESCAPE)
-			ssflags |= SS_ESCAPES_ALLOWED;
-		if (flags & MINRX_REG_NEWLINE)
-			ssflags |= SS_NO_NEWLINES;
-		brexp = bracket_expr_create(wconv.cp, wconv.ep - wconv.cp, &wconv.cp,
-					    &wconv.mbs, ssflags, mbmax, errbuf, sizeof errbuf);
-		if (brexp) {
-			wconv.len = 0;
-			wconv.nextchr();
-			return MINRX_REG_SUCCESS;
-		} else {
-			// FIXME: API impedance mismatch.  Ideally bracketexpr library
-			// should return an enumeration of error codes that we can map
-			// to corresponding regex.h error codes.  Right now to do that
-			// mapping we would have to compare error strings.
-			return MINRX_REG_EBRACK;
+		// Add parsing code here.
+//			wconv.len = 0;
+//			wconv.nextchr();
+	}
+	CSet &set(WChar wclo, WChar wchi) {
+		charset_add_range(charset, wclo, wchi, & errcode);	// FIXME: no error checking
+		return *this;
+	}
+	CSet &set(WChar wc) {
+		charset_add_char(charset, wc, & errcode);	// FIXME: no error checking
+		return *this;
+	}
+	bool test(WChar wc) const {
+		if (wc < 0)
+			return false;
+		return charset_in_set(charset, wc, & errcode);
+	}
+	bool cclass(minrx_regcomp_flags_t flags, WConv::Encoding /*enc*/, const std::string &name) {
+		charset_add_cclass(charset, name.c_str(), & errcode):	// FIXME: Add error checking
+		if ((flags & MINRX_REG_ICASE) != 0) {
+			if (name == "lower")
+				charset_add_cclass(charset, "upper", & errcode):	// FIXME: Add error checking
+			else if (name == "upper")
+				charset_add_cclass(charset, "lower", & errcode):	// FIXME: Add error checking
 		}
+		return errcode == CSET_SUCCESS;
 	}
 #else
 	static std::map<std::string, CSet> cclmemo;
@@ -572,7 +589,7 @@ struct CSet {
 #endif
 };
 
-#ifndef SETSEARCH
+#ifndef CHARSET
 std::map<std::string, CSet> CSet::cclmemo;
 std::mutex CSet::cclmutex;
 #endif
@@ -849,35 +866,9 @@ struct Compile {
 					if (icmap.find(key) == icmap.end()) {
 						icmap.emplace(key, csets.size());
 						csets.emplace_back();
-#ifdef SETSEARCH
-						// Setsearch API does not provide for direct construction of a set
-						// from its elments.  It requires always parsing a bracket expression.
-						// Hand-craft a bracket expression for all case variants.  This is
-						// easy in Byte encodings, a little harder in multibyte encodings.
-						// Note we are assuming that wc/wcl/wcu are not [ ^ - \  ], which
-						// is probably true.
-						if (enc == WConv::Encoding::Byte) {
-							char buf[5] = { '[', (char) wc, (char) wcl, (char) wcu, ']' };
-							WConv wconv(enc, buf, buf + 5);
-							csets.back().parse(flags, enc, 1, wconv.nextchr());
-						} else {
-							char buf[5 * MB_LEN_MAX];
-							std::mbstate_t mbs;
-							std::memset(&mbs, 0, sizeof mbs);
-							int n = 0;
-							n += std::wcrtomb(buf + n, L'[', &mbs);
-							n += std::wcrtomb(buf + n, wc, &mbs);
-							n += std::wcrtomb(buf + n, wcl, &mbs);
-							n += std::wcrtomb(buf + n, wcu, &mbs);
-							n += std::wcrtomb(buf + n, L']', &mbs);
-							WConv wconv(enc, buf, buf + n);
-							csets.back().parse(flags, enc, mbmax, wconv.nextchr());
-						}
-#else
 						csets.back().set(wc);
 						csets.back().set(wcl);
 						csets.back().set(wcu);
-#endif
 					}
 					lhs.push_back({Node::CSet, {icmap[key], 0}, nstk});
 				} else {
@@ -906,15 +897,10 @@ struct Compile {
 			lhmaxstk = nstk;
 			if (!dot.has_value()) {
 				dot = csets.size();
-#ifdef SETSEARCH
-				WConv wc(enc, ".");
-				csets.emplace_back().parse(flags, enc, mbmax, wc.nextchr());
-#else
 				csets.emplace_back();
 				if ((flags & MINRX_REG_NEWLINE) != 0)
 					csets.back().set(L'\n');
 				csets.back().invert();
-#endif
 			}
 			lhs.push_back({Node::CSet, {*dot, 0}, nstk});
 			wconv.nextchr();
