@@ -363,7 +363,6 @@ WConv &(WConv::*const WConv::nextfns[3])() = { &WConv::nextbyte, &WConv::nextmbt
 struct CSet {
 #ifdef CHARSET
 	charset_t *charset = nullptr;
-	int errcode;
 	CSet() {
 		int errcode = 0;
 		charset = charset_create(& errcode);
@@ -380,9 +379,126 @@ struct CSet {
 		return *this;
 	}
 	minrx_result_t parse(minrx_regcomp_flags_t flags, WConv::Encoding enc, std::size_t mbmax, WConv &wconv) {
-		// Add parsing code here.
-//			wconv.len = 0;
-//			wconv.nextchr();
+		auto wc = wconv.nextchr().look();
+		bool inv = wc == L'^';
+		if (inv)
+			wc = wconv.nextchr().look();
+		for (bool first = true;; first = false) {
+			auto wclo = wc, wchi = wc;
+			if (wclo == WConv::End)
+				return MINRX_REG_EBRACK;
+			wc = wconv.nextchr().look();
+			if (wclo == L']' && !first)
+				break;
+			if (wclo == L'\\' && (flags & MINRX_REG_BRACK_ESCAPE) != 0) {
+				if (wc != WConv::End) {
+					wclo = wchi = wc;
+					wc = wconv.nextchr().look();
+				} else {
+					return MINRX_REG_EESCAPE;
+				}
+			} else if (wclo == L'[') {
+				if (wc == L'.') {
+					wc = wconv.nextchr().look();
+					wclo = wchi = wc;
+					int32_t coll[2] = { wc, L'\0' };
+					charset_add_collate(charset, coll);	// FIXME: No error checking
+					if ((flags & MINRX_REG_ICASE) != 0) {
+						if (std::iswlower(wc))
+							coll[0] = std::towupper(wc);
+						else if (std::iswupper(wc))
+							coll[0] = std::towlower(wc);
+						charset_add_collate(charset, coll);	// FIXME: No error checking
+					}
+					wc = wconv.nextchr().look();
+					if (wc != L'.' || (wc = wconv.nextchr().look() != L']'))
+						return MINRX_REG_ECOLLATE;
+				} else if (wc == L':') {
+					wconv.nextchr();
+					auto bp = wconv.ptr();
+					while (wconv.look() != WConv::End && wconv.look() != L':')
+						wconv.nextchr();
+					if (wconv.look() != L':')
+						return MINRX_REG_ECTYPE;
+					auto ep = wconv.ptr();
+					wconv.nextchr();
+					if (wconv.look() != L']')
+						return MINRX_REG_ECTYPE;
+					wc = wconv.nextchr().look();
+					auto cclname = std::string(bp, ep);
+					if (cclass(flags, enc, cclname))
+						continue;
+					return MINRX_REG_ECTYPE;
+				} else if (wc == L'=') {
+					wc = wconv.nextchr().look();
+					wclo = wchi = wc;
+					charset_add_equiv(charset, wc);	// FIXME: No error checking
+					if ((flags & MINRX_REG_ICASE) != 0) {
+						if (std::iswlower(wc))
+							charset_add_equiv(charset, std::towupper(wc));	// FIXME: no error checking
+						else if (std::iswupper(wc))
+							charset_add_equiv(charset, std::towlower(wc));	// FIXME: no error checking
+					}
+					wc = wconv.nextchr().look();
+					if (wc != L'.' || (wc = wconv.nextchr().look() != L']'))
+						return MINRX_REG_ECOLLATE;
+				}
+			}
+			bool range = false;
+			if (wc == L'-') {
+				auto save = wconv.save();
+				wc = wconv.nextchr().look();
+				if (wc == WConv::End)
+					return MINRX_REG_EBRACK;
+				if (wc != L']') {
+					wchi = wc;
+					wc = wconv.nextchr().look();
+					if (wchi == L'\\' && (flags & MINRX_REG_BRACK_ESCAPE) != 0) {
+						if (wc != WConv::End) {
+							wchi = wc;
+							wc = wconv.nextchr().look();
+						} else {
+							return MINRX_REG_EESCAPE;
+						}
+					} else if (wchi == L'[') {
+						if (wc == L'.') {
+							wchi = wconv.nextchr().look();
+							wc = wconv.nextchr().look();
+							if (wc != L'.' || (wc = wconv.nextchr().look()) != L']')
+								return MINRX_REG_ECOLLATE;
+							wc = wconv.nextchr().look();
+						} else if (wc == L':' || wc == L'=') {
+							return MINRX_REG_ERANGE; // can't be range endpoint
+						}
+					}
+					range = true;
+				} else {
+					wconv.restore(save);
+					wc = L'-';
+				}
+			}
+			if (wclo > wchi || (wclo != wchi && (wclo < 0 || wchi < 0)))
+				return MINRX_REG_ERANGE;
+			if (wclo >= 0) {
+				set(wclo, wchi);
+				if ((flags & MINRX_REG_ICASE) != 0) {
+					if (std::iswlower(wclo) && std::iswlower(wchi)) {
+						set(std::towupper(wclo), std::towupper(wchi));
+					} else if (std::iswupper(wclo) && std::iswupper(wchi)) {
+						set(std::towlower(wclo), std::towlower(wchi));
+					}
+
+				}
+			}
+			if (range && wc == L'-' && wconv.lookahead() != L']')
+				return MINRX_REG_ERANGE;
+		}
+		if (inv) {
+			if ((flags & MINRX_REG_NEWLINE) != 0)
+				set(L'\n');
+			invert();
+		}
+		return MINRX_REG_SUCCESS;
 	}
 	CSet &set(WChar wclo, WChar wchi) {
 		charset_add_range(charset, wclo, wchi);	// FIXME: no error checking
@@ -393,14 +509,14 @@ struct CSet {
 		return *this;
 	}
 	bool cclass(minrx_regcomp_flags_t flags, WConv::Encoding /*enc*/, const std::string &name) {
-		charset_add_cclass(charset, name.c_str());	// FIXME: Add error checking
+		int result = charset_add_cclass(charset, name.c_str());
 		if ((flags & MINRX_REG_ICASE) != 0) {
 			if (name == "lower")
 				charset_add_cclass(charset, "upper");	// FIXME: Add error checking
 			else if (name == "upper")
 				charset_add_cclass(charset, "lower");	// FIXME: Add error checking
 		}
-		return errcode == CSET_SUCCESS;
+		return result == CSET_SUCCESS;
 	}
 #else
 	static std::map<std::string, CSet> cclmemo;
