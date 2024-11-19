@@ -36,6 +36,7 @@
 #include <string>
 #include <tuple>
 #include <vector>
+#define CHARSET 1
 #ifdef CHARSET
 #include <memory>
 #include "charset.h"
@@ -361,24 +362,21 @@ WConv &(WConv::*const WConv::nextfns[3])() = { &WConv::nextbyte, &WConv::nextmbt
 
 struct CSet {
 #ifdef CHARSET
-	const charset_t charset = nullptr;
+	charset_t *charset = nullptr;
 	int errcode;
 	CSet() {
-		int csflags = 0;
-		if (flags & MINRX_REG_NEWLINE) {
-			csflags |= CSET_NO_NEWLINES;
-		}
-		charset = charset_create(csflags, & errcode);
+		int errcode = 0;
+		charset = charset_create(& errcode);
 		// FIXME: Throw error if charset == nullptr
 	}
 	CSet(const CSet &) = delete;
 	CSet &operator=(const CSet &) = delete;
-	CSet(CSet &&cs): brexp(cs.charset) { cs.charset = nullptr; }
+	CSet(CSet &&cs): charset(cs.charset) { cs.charset = nullptr; }
 	CSet &operator=(CSet &&cs) { charset = cs.charset; cs.charset = nullptr; return *this; }
 	~CSet() { if (charset) { charset_free(charset); charset = nullptr; } }
-	bool test(WChar wc) const { return wc >= 0 ? charset_in_set(charset, wc, & errcode) : false; }
+	bool test(WChar wc) const { return charset_in_set(charset, wc); }
 	CSet &invert() {
-		charset_invert(charset, & errcode); // FIXME: no error checking
+		charset_invert(charset); // FIXME: no error checking
 		return *this;
 	}
 	minrx_result_t parse(minrx_regcomp_flags_t flags, WConv::Encoding enc, std::size_t mbmax, WConv &wconv) {
@@ -387,25 +385,20 @@ struct CSet {
 //			wconv.nextchr();
 	}
 	CSet &set(WChar wclo, WChar wchi) {
-		charset_add_range(charset, wclo, wchi, & errcode);	// FIXME: no error checking
+		charset_add_range(charset, wclo, wchi);	// FIXME: no error checking
 		return *this;
 	}
 	CSet &set(WChar wc) {
-		charset_add_char(charset, wc, & errcode);	// FIXME: no error checking
+		charset_add_char(charset, wc);	// FIXME: no error checking
 		return *this;
 	}
-	bool test(WChar wc) const {
-		if (wc < 0)
-			return false;
-		return charset_in_set(charset, wc, & errcode);
-	}
 	bool cclass(minrx_regcomp_flags_t flags, WConv::Encoding /*enc*/, const std::string &name) {
-		charset_add_cclass(charset, name.c_str(), & errcode):	// FIXME: Add error checking
+		charset_add_cclass(charset, name.c_str());	// FIXME: Add error checking
 		if ((flags & MINRX_REG_ICASE) != 0) {
 			if (name == "lower")
-				charset_add_cclass(charset, "upper", & errcode):	// FIXME: Add error checking
+				charset_add_cclass(charset, "upper");	// FIXME: Add error checking
 			else if (name == "upper")
-				charset_add_cclass(charset, "lower", & errcode):	// FIXME: Add error checking
+				charset_add_cclass(charset, "lower");	// FIXME: Add error checking
 		}
 		return errcode == CSET_SUCCESS;
 	}
