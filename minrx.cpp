@@ -36,9 +36,10 @@
 #include <string>
 #include <tuple>
 #include <vector>
-#ifdef SETSEARCH
+#define CHARSET 1
+#ifdef CHARSET
 #include <memory>
-#include "bracketexpr.h"
+#include "charset.h"
 #endif
 #include "minrx.h"
 
@@ -251,7 +252,7 @@ struct QVec {
 typedef int32_t WChar;			// because wchar_t may not be 32 bits
 constexpr int32_t WCharMax = 0x10FFFF;	// maximum code point: valid for Unicode and (FIXME!) blithely assumed for non-Unicode
 class WConv {
-#ifdef SETSEARCH
+#ifdef CHARSET
 	friend class CSet;
 #endif
 public:
@@ -360,37 +361,162 @@ public:
 WConv &(WConv::*const WConv::nextfns[3])() = { &WConv::nextbyte, &WConv::nextmbtowc, &WConv::nextutf8 };
 
 struct CSet {
-#ifdef SETSEARCH
-	const BRACKET_EXPR *brexp = nullptr;
-	CSet() = default;
+#ifdef CHARSET
+	charset_t *charset = nullptr;
+	CSet() {
+		int errcode = 0;
+		charset = charset_create(& errcode);
+		// FIXME: Throw error if charset == nullptr
+	}
 	CSet(const CSet &) = delete;
 	CSet &operator=(const CSet &) = delete;
-	CSet(CSet &&cs): brexp(cs.brexp) { cs.brexp = nullptr; }
-	CSet &operator=(CSet &&cs) { brexp = cs.brexp; cs.brexp = nullptr; return *this; }
-	~CSet() { if (brexp) { bracket_expr_free(brexp); brexp = nullptr; } }
-	bool test(WChar wc) const { return bracket_expr_match(brexp, wc, wc >= 0); }
+	CSet(CSet &&cs): charset(cs.charset) { cs.charset = nullptr; }
+	CSet &operator=(CSet &&cs) { charset = cs.charset; cs.charset = nullptr; return *this; }
+	~CSet() { if (charset) { charset_free(charset); charset = nullptr; } }
+	bool test(WChar wc) const { return charset_in_set(charset, wc); }
+	CSet &invert() {
+		charset_invert(charset); // FIXME: no error checking
+		return *this;
+	}
 	minrx_result_t parse(minrx_regcomp_flags_t flags, WConv::Encoding enc, std::size_t mbmax, WConv &wconv) {
-		char errbuf[64];
-		int ssflags = SS_DOT;
-		if (flags & MINRX_REG_ICASE)
-			ssflags |= SS_IGNORE_CASE;
-		if (flags & MINRX_REG_BRACK_ESCAPE)
-			ssflags |= SS_ESCAPES_ALLOWED;
-		if (flags & MINRX_REG_NEWLINE)
-			ssflags |= SS_NO_NEWLINES;
-		brexp = bracket_expr_create(wconv.cp, wconv.ep - wconv.cp, &wconv.cp,
-					    &wconv.mbs, ssflags, mbmax, errbuf, sizeof errbuf);
-		if (brexp) {
-			wconv.len = 0;
-			wconv.nextchr();
-			return MINRX_REG_SUCCESS;
-		} else {
-			// FIXME: API impedance mismatch.  Ideally bracketexpr library
-			// should return an enumeration of error codes that we can map
-			// to corresponding regex.h error codes.  Right now to do that
-			// mapping we would have to compare error strings.
-			return MINRX_REG_EBRACK;
+		auto wc = wconv.nextchr().look();
+		bool inv = wc == L'^';
+		if (inv)
+			wc = wconv.nextchr().look();
+		for (bool first = true;; first = false) {
+			auto wclo = wc, wchi = wc;
+			if (wclo == WConv::End)
+				return MINRX_REG_EBRACK;
+			wc = wconv.nextchr().look();
+			if (wclo == L']' && !first)
+				break;
+			if (wclo == L'\\' && (flags & MINRX_REG_BRACK_ESCAPE) != 0) {
+				if (wc != WConv::End) {
+					wclo = wchi = wc;
+					wc = wconv.nextchr().look();
+				} else {
+					return MINRX_REG_EESCAPE;
+				}
+			} else if (wclo == L'[') {
+				if (wc == L'.') {
+					wc = wconv.nextchr().look();
+					wclo = wchi = wc;
+					int32_t coll[2] = { wc, L'\0' };
+					charset_add_collate(charset, coll);	// FIXME: No error checking
+					if ((flags & MINRX_REG_ICASE) != 0) {
+						if (std::iswlower(wc))
+							coll[0] = std::towupper(wc);
+						else if (std::iswupper(wc))
+							coll[0] = std::towlower(wc);
+						charset_add_collate(charset, coll);	// FIXME: No error checking
+					}
+					wc = wconv.nextchr().look();
+					if (wc != L'.' || (wc = wconv.nextchr().look() != L']'))
+						return MINRX_REG_ECOLLATE;
+				} else if (wc == L':') {
+					wconv.nextchr();
+					auto bp = wconv.ptr();
+					while (wconv.look() != WConv::End && wconv.look() != L':')
+						wconv.nextchr();
+					if (wconv.look() != L':')
+						return MINRX_REG_ECTYPE;
+					auto ep = wconv.ptr();
+					wconv.nextchr();
+					if (wconv.look() != L']')
+						return MINRX_REG_ECTYPE;
+					wc = wconv.nextchr().look();
+					auto cclname = std::string(bp, ep);
+					if (cclass(flags, enc, cclname))
+						continue;
+					return MINRX_REG_ECTYPE;
+				} else if (wc == L'=') {
+					wc = wconv.nextchr().look();
+					wclo = wchi = wc;
+					charset_add_equiv(charset, wc);	// FIXME: No error checking
+					if ((flags & MINRX_REG_ICASE) != 0) {
+						if (std::iswlower(wc))
+							charset_add_equiv(charset, std::towupper(wc));	// FIXME: no error checking
+						else if (std::iswupper(wc))
+							charset_add_equiv(charset, std::towlower(wc));	// FIXME: no error checking
+					}
+					wc = wconv.nextchr().look();
+					if (wc != L'.' || (wc = wconv.nextchr().look() != L']'))
+						return MINRX_REG_ECOLLATE;
+				}
+			}
+			bool range = false;
+			if (wc == L'-') {
+				auto save = wconv.save();
+				wc = wconv.nextchr().look();
+				if (wc == WConv::End)
+					return MINRX_REG_EBRACK;
+				if (wc != L']') {
+					wchi = wc;
+					wc = wconv.nextchr().look();
+					if (wchi == L'\\' && (flags & MINRX_REG_BRACK_ESCAPE) != 0) {
+						if (wc != WConv::End) {
+							wchi = wc;
+							wc = wconv.nextchr().look();
+						} else {
+							return MINRX_REG_EESCAPE;
+						}
+					} else if (wchi == L'[') {
+						if (wc == L'.') {
+							wchi = wconv.nextchr().look();
+							wc = wconv.nextchr().look();
+							if (wc != L'.' || (wc = wconv.nextchr().look()) != L']')
+								return MINRX_REG_ECOLLATE;
+							wc = wconv.nextchr().look();
+						} else if (wc == L':' || wc == L'=') {
+							return MINRX_REG_ERANGE; // can't be range endpoint
+						}
+					}
+					range = true;
+				} else {
+					wconv.restore(save);
+					wc = L'-';
+				}
+			}
+			if (wclo > wchi || (wclo != wchi && (wclo < 0 || wchi < 0)))
+				return MINRX_REG_ERANGE;
+			if (wclo >= 0) {
+				set(wclo, wchi);
+				if ((flags & MINRX_REG_ICASE) != 0) {
+					if (std::iswlower(wclo) && std::iswlower(wchi)) {
+						set(std::towupper(wclo), std::towupper(wchi));
+					} else if (std::iswupper(wclo) && std::iswupper(wchi)) {
+						set(std::towlower(wclo), std::towlower(wchi));
+					}
+
+				}
+			}
+			if (range && wc == L'-' && wconv.lookahead() != L']')
+				return MINRX_REG_ERANGE;
 		}
+		if (inv) {
+			if ((flags & MINRX_REG_NEWLINE) != 0)
+				set(L'\n');
+			invert();
+		}
+		return MINRX_REG_SUCCESS;
+	}
+	CSet &set(WChar wclo, WChar wchi) {
+		charset_add_range(charset, wclo, wchi);	// FIXME: no error checking
+		return *this;
+	}
+	CSet &set(WChar wc) {
+		charset_add_char(charset, wc);	// FIXME: no error checking
+		return *this;
+	}
+	bool cclass(minrx_regcomp_flags_t flags, WConv::Encoding /*enc*/, const std::string &name) {
+		int result = charset_add_cclass(charset, name.c_str());
+		if ((flags & MINRX_REG_ICASE) != 0) {
+			if (name == "lower")
+				charset_add_cclass(charset, "upper");	// FIXME: Add error checking
+			else if (name == "upper")
+				charset_add_cclass(charset, "lower");	// FIXME: Add error checking
+		}
+		return result == CSET_SUCCESS;
 	}
 #else
 	static std::map<std::string, CSet> cclmemo;
@@ -572,7 +698,7 @@ struct CSet {
 #endif
 };
 
-#ifndef SETSEARCH
+#ifndef CHARSET
 std::map<std::string, CSet> CSet::cclmemo;
 std::mutex CSet::cclmutex;
 #endif
@@ -849,35 +975,9 @@ struct Compile {
 					if (icmap.find(key) == icmap.end()) {
 						icmap.emplace(key, csets.size());
 						csets.emplace_back();
-#ifdef SETSEARCH
-						// Setsearch API does not provide for direct construction of a set
-						// from its elments.  It requires always parsing a bracket expression.
-						// Hand-craft a bracket expression for all case variants.  This is
-						// easy in Byte encodings, a little harder in multibyte encodings.
-						// Note we are assuming that wc/wcl/wcu are not [ ^ - \  ], which
-						// is probably true.
-						if (enc == WConv::Encoding::Byte) {
-							char buf[5] = { '[', (char) wc, (char) wcl, (char) wcu, ']' };
-							WConv wconv(enc, buf, buf + 5);
-							csets.back().parse(flags, enc, 1, wconv.nextchr());
-						} else {
-							char buf[5 * MB_LEN_MAX];
-							std::mbstate_t mbs;
-							std::memset(&mbs, 0, sizeof mbs);
-							int n = 0;
-							n += std::wcrtomb(buf + n, L'[', &mbs);
-							n += std::wcrtomb(buf + n, wc, &mbs);
-							n += std::wcrtomb(buf + n, wcl, &mbs);
-							n += std::wcrtomb(buf + n, wcu, &mbs);
-							n += std::wcrtomb(buf + n, L']', &mbs);
-							WConv wconv(enc, buf, buf + n);
-							csets.back().parse(flags, enc, mbmax, wconv.nextchr());
-						}
-#else
 						csets.back().set(wc);
 						csets.back().set(wcl);
 						csets.back().set(wcu);
-#endif
 					}
 					lhs.push_back({Node::CSet, {icmap[key], 0}, nstk});
 				} else {
@@ -906,15 +1006,10 @@ struct Compile {
 			lhmaxstk = nstk;
 			if (!dot.has_value()) {
 				dot = csets.size();
-#ifdef SETSEARCH
-				WConv wc(enc, ".");
-				csets.emplace_back().parse(flags, enc, mbmax, wc.nextchr());
-#else
 				csets.emplace_back();
 				if ((flags & MINRX_REG_NEWLINE) != 0)
 					csets.back().set(L'\n');
 				csets.back().invert();
-#endif
 			}
 			lhs.push_back({Node::CSet, {*dot, 0}, nstk});
 			wconv.nextchr();
