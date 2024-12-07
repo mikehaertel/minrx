@@ -74,7 +74,8 @@ static char **get_patterns(const char *filename);
 static char **build_pattern_list(char *pattern_list);
 static void build_regexps(char **pattern_list);
 static void build_libc_regexps(char **pattern_list);
-static void process(const char *filename, FILE *fp);
+static void (*process)(const char *filename, FILE *fp);
+static void minrx_process(const char *filename, FILE *fp);
 static void libc_process(const char *filename, FILE *fp);
 static void set_syntax_flags(void);
 
@@ -101,54 +102,34 @@ main(int argc, char **argv)
 	} else
 		pattern_list = build_pattern_list(pattern);
 
-	if (use_minrx)
+	if (use_minrx) {
 		build_regexps(pattern_list);
-	else
+		process = minrx_process;
+	} else {
 		build_libc_regexps(pattern_list);
+		process = libc_process;
+	}
 
 	if (argc - optind > 1)
 		do_filenames = true;
 
-	if (use_minrx) {
-		if (optind >= argc)
-			process("(standard input)", stdin);
-		else {
-			for (i = optind; i < argc; i++) {
-				if (strcmp(argv[i], "-") == 0)
-					process("(standard input)", stdin);
-				else {
-					FILE *fp = fopen(argv[i], "r");
+	if (optind >= argc)
+		process("(standard input)", stdin);
+	else {
+		for (i = optind; i < argc; i++) {
+			if (strcmp(argv[i], "-") == 0)
+				process("(standard input)", stdin);
+			else {
+				FILE *fp = fopen(argv[i], "r");
 
-					if (fp == NULL) {
-						if (print_errors)
-							fprintf(stderr, "%s: %s: could not open: %s\n",
-								myname, argv[i], strerror(errno));
-						continue;
-					}
-					process(argv[i], fp);
-					fclose(fp);
+				if (fp == NULL) {
+					if (print_errors)
+						fprintf(stderr, "%s: %s: could not open: %s\n",
+							myname, argv[i], strerror(errno));
+					continue;
 				}
-			}
-		}
-	} else {
-		if (optind >= argc)
-			libc_process("(standard input)", stdin);
-		else {
-			for (i = optind; i < argc; i++) {
-				if (strcmp(argv[i], "-") == 0)
-					libc_process("(standard input)", stdin);
-				else {
-					FILE *fp = fopen(argv[i], "r");
-
-					if (fp == NULL) {
-						if (print_errors)
-							fprintf(stderr, "%s: %s: could not open: %s\n",
-								myname, argv[i], strerror(errno));
-						continue;
-					}
-					libc_process(argv[i], fp);
-					fclose(fp);
-				}
+				process(argv[i], fp);
+				fclose(fp);
 			}
 		}
 	}
@@ -181,10 +162,10 @@ set_syntax_flags(void)
 	}
 }
 
-/* process --- look for matches */
+/* minrx_process --- look for matches */
 
 static void
-process(const char *filename, FILE *fp)
+minrx_process(const char *filename, FILE *fp)
 {
 	static char *buf = NULL;
 	static size_t n = 0;
