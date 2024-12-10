@@ -548,7 +548,7 @@ struct CSet {
 							charset_add_equiv(charset, std::towlower(wc));	// FIXME: no error checking
 					}
 					wc = wconv.nextchr().look();
-					if (wc != L'.' || (wc = wconv.nextchr().look() != L']'))
+					if (wc != L'=' || (wc = wconv.nextchr().look() != L']'))
 						return MINRX_REG_ECOLLATE;
 #else
 					// FIXME: recognize some equivalence classes.
