@@ -39,6 +39,19 @@
 
 #include "minrx.h"
 
+#ifdef HAVE_CONFIG_H
+#include <config.h>
+#endif /* HAVE_CONFIG_H */
+
+#ifdef HAVE_GETTEXT_H
+#include "gettext.h"
+#define _(msgid)  gettext(msgid)
+#else /* ! HAVE_GETTEXT_H */
+#define _(msgid)  msgid
+#endif /* ! HAVE_GETTEXT_H */
+
+#define N_(msgid) msgid
+
 namespace MinRX {
 
 template <typename UINT> inline auto ctz(UINT x) { return __builtin_ctz(x); }
@@ -1281,21 +1294,21 @@ size_t
 minrx_regerror(int errcode, const minrx_regex_t *, char *errbuf, size_t errsize)
 {
 	static const char *const messages[] = {
-		"success",
-		"bad pattern",
-		"invalid contents of {}",
-		"? * + or {interval} not preceded by valid subpattern",
-		"unbalanced {",
-		"unbalanced [",
-		"invalid collating element",
-		"invalid character class name",
-		"invalid trailing backslash",
-		"unbalanced (",
-		"invalid range endpoint",
-		"memory allocation failed",
-		"invalid \\digit",
-		"match not found",
-		"unknown error code",
+		N_("success"),
+		N_("bad pattern"),
+		N_("invalid contents of {}"),
+		N_("? * + or {interval} not preceded by valid subpattern"),
+		N_("unbalanced {"),
+		N_("unbalanced ["),
+		N_("invalid collating element"),
+		N_("invalid character class name"),
+		N_("invalid trailing backslash"),
+		N_("unbalanced ("),
+		N_("invalid range endpoint"),
+		N_("memory allocation failed"),
+		N_("invalid \\digit"),
+		N_("match not found"),
+		N_("unknown error code"),
 	};
 	if (errcode < 0 || errcode > MINRX_REG_UNKNOWN)
 		errcode = MINRX_REG_UNKNOWN;
