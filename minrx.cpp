@@ -40,11 +40,11 @@
 #include "minrx.h"
 
 #ifdef HAVE_CONFIG_H
-#include <config.h>
+#include "config.h"
 #endif /* HAVE_CONFIG_H */
 
 #ifdef HAVE_GETTEXT_H
-#include "gettext.h"
+#include <gettext.h>
 #define _(msgid)  gettext(msgid)
 #else /* ! HAVE_GETTEXT_H */
 #define _(msgid)  msgid
@@ -1312,7 +1312,7 @@ minrx_regerror(int errcode, const minrx_regex_t *, char *errbuf, size_t errsize)
 	};
 	if (errcode < 0 || errcode > MINRX_REG_UNKNOWN)
 		errcode = MINRX_REG_UNKNOWN;
-	size_t size = snprintf(errbuf, errsize, "%s", messages[errcode]);
+	size_t size = snprintf(errbuf, errsize, "%s", _(messages[errcode]));
 	if (errsize != 0 && size == errsize)
 		errbuf[errsize - 1] = '\0';
 	return size + 1;
