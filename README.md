@@ -135,16 +135,7 @@ Currently planned work:
 
 ## License
 
-This code is released under the GNU Lesser General Public License (GPL),
-version 3 or any later version.
-
-I want to preserve the ability to relicense this code in the future
-under a more-permissive license, such as BSD or LGPL-v2.1.  So I will
-only accept contributions from contributers who agree in advance that
-their contributions can be relicensed under BSD or LGPL-v2.1 licenses.
-
-The text of the GNU GPL licenses is included in the files [COPYING](COPYING)
-and [COPYING.LESSER](COPYING.LESSER).
+This code is released under the Simplified BSD (2-clause) license.
 
 The manual page `minrx.3` (contributed by Arnold Robbins) is
 under its own license, the text of which can be found in that file.
