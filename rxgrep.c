@@ -83,9 +83,10 @@ static char **get_patterns(const char *filename);
 static char **build_pattern_list(char *pattern_list);
 static void build_regexps(char **pattern_list);
 static void build_libc_regexps(char **pattern_list);
-static void (*process)(const char *filename, FILE *fp);
-static void minrx_process(const char *filename, FILE *fp);
-static void libc_process(const char *filename, FILE *fp);
+static void process(const char *filename, FILE *fp);
+static bool minrx_matches(int i, char *buf, ptrdiff_t len);
+static bool libc_matches(int i, char *buf, ptrdiff_t len);
+static bool (*matchfunc)(int i, char *buf, ptrdiff_t len);
 static void set_syntax_flags(void);
 
 
@@ -113,10 +114,10 @@ main(int argc, char **argv)
 
 	if (use_minrx) {
 		build_regexps(pattern_list);
-		process = minrx_process;
+		matchfunc = minrx_matches;
 	} else {
 		build_libc_regexps(pattern_list);
-		process = libc_process;
+		matchfunc = libc_matches;
 	}
 
 	if (argc - optind > 1)
@@ -171,85 +172,48 @@ set_syntax_flags(void)
 	}
 }
 
-/* minrx_process --- look for matches */
+/* minrx_matches --- return true if regexp[i] matches buf */
 
-static void
-minrx_process(const char *filename, FILE *fp)
+static bool
+minrx_matches(int i, char *buf, ptrdiff_t len)
 {
-	static char *buf = NULL;
-	static size_t n = 0;
-	int fcount = 0;
-	int nbytes;
-	int line_number;
+	bool matches = false;
+	minrx_regmatch_t rm;
 
-	for (line_number = 1; (nbytes = getline(& buf, & n, fp)) != EOF; line_number++) {
-		bool matches = false;
-		ptrdiff_t len = strlen(buf);
-		minrx_regmatch_t rm;
+	rm.rm_so = rm.rm_eo = 0;
 
-		if (buf[len-1] == '\n')
-			len--;
-
-		for (size_t i = 0; i < num_regexps; i++) {
-			rm.rm_so = rm.rm_eo = 0;
-
-			if (minrx_regexec(& minrx_regexps[i], buf, 1, & rm, 0) == 0) {
-				matches = true;
-				if (matches && wholelines && (rm.rm_so != 0 || rm.rm_eo != len))
-					matches = false;
-
-			}
-
-			if (invert)
-			        matches = ! matches;
-
-			fcount += !! matches;	// 1 or 0
-
-			if (! matches)
-				continue;
-
-			// at this point we have a match
-			if (! do_count) {
-				if (! print_output)
-					goto out;
-
-				if (list_files) {
-					printf("%s\n", filename);
-					goto out;
-				}
-
-				if (do_filenames) {
-					if (print_num)
-						printf("%s:%d:%s", filename, line_number, buf);
-					else
-						printf("%s:%s", filename, buf);
-				} else if (print_num)
-					printf("%d:%s", line_number, buf);
-				else
-					printf("%s", buf);
-
-				if (buf[len] != '\n')	// in case last line doesn't have newline
-					putchar('\n');
-			}
-			break;	// after any match, get the next line
-		}
+	if (minrx_regexec(& minrx_regexps[i], buf, 1, & rm, 0) == 0) {
+		matches = true;
+		if (matches && wholelines && (rm.rm_so != 0 || rm.rm_eo != len))
+			matches = false;
 	}
 
-	if (print_output && do_count) {
-		if (list_files)
-			printf("%s:%d\n", filename, fcount);
-		else
-			printf("%d\n", fcount);
-	}
-
-out:
-	total += fcount;
+	return matches;
 }
 
-/* libc_process --- look for matches */
+/* libc_matches --- return true if regexp[i] matches buf */
+
+static bool
+libc_matches(int i, char *buf, ptrdiff_t len)
+{
+	bool matches = false;
+	regmatch_t rm;
+
+	rm.rm_so = rm.rm_eo = 0;
+
+	if (regexec(& regexps[i], buf, 1, & rm, 0) == 0) {
+		matches = true;
+		if (matches && wholelines && (rm.rm_so != 0 || rm.rm_eo != len))
+			matches = false;
+	}
+
+	return matches;
+}
+
+/* process --- look for matches */
 
 static void
-libc_process(const char *filename, FILE *fp)
+process(const char *filename, FILE *fp)
 {
 	static char *buf = NULL;
 	static size_t n = 0;
@@ -260,20 +224,12 @@ libc_process(const char *filename, FILE *fp)
 	for (line_number = 1; (nbytes = getline(& buf, & n, fp)) != EOF; line_number++) {
 		bool matches = false;
 		ptrdiff_t len = strlen(buf);
-		regmatch_t rm;
 
 		if (buf[len-1] == '\n')
 			len--;
 
 		for (size_t i = 0; i < num_regexps; i++) {
-			rm.rm_so = rm.rm_eo = 0;
-
-			if (regexec(& regexps[i], buf, 1, & rm, 0) == 0) {
-				matches = true;
-				if (matches && wholelines && (rm.rm_so != 0 || rm.rm_eo != len))
-					matches = false;
-
-			}
+			matches = matchfunc(i, buf, len);
 
 			if (invert)
 			        matches = ! matches;
