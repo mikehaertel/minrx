@@ -709,6 +709,7 @@ struct Node {
 struct Regexp {
 	const std::vector<CSet> csets;
 	const std::vector<Node> nodes;
+	std::optional<CSet> first;
 	std::size_t nstk;
 	std::size_t nsub;
 	WConv::Encoding enc;
@@ -1101,6 +1102,55 @@ struct Compile {
 		}
 		return {lhs, lhmaxstk, MINRX_REG_SUCCESS};
 	}
+	std::optional<CSet> firstclosure(const std::vector<Node> &nodes) {
+		if (nodes.size() == 0)
+			return {};
+		QSet<NInt> epsq(nodes.size()), epsv(nodes.size()), firsts(nodes.size());
+		auto add = [&epsq, &epsv](NInt n) { if (!epsv.contains(n)) { epsq.insert(n); epsv.insert(n); } };
+		epsq.insert(0);
+		do {
+			auto k = epsq.remove();
+			auto &n = nodes[k];
+			if (n.type <= Node::CSet)
+				firsts.insert(k);
+			else
+				switch (n.type) {
+				case Node::Exit:
+					return {};
+				case Node::Fork:
+					do {
+						add(k + 1);
+						k = k + 1 + nodes[k].args[0];
+					} while (nodes[k].type != Node::Join);
+					break;
+				case Node::Goto:
+					add(k + 1 + n.args[0]);
+					break;
+				case Node::Loop:
+					add(k + 1);
+					if (n.args[1])
+						add(k + 1 + n.args[0]);
+					break;
+				case Node::Skip:
+					add(k + 1);
+					add(k + 1 + n.args[0]);
+					break;
+				default:
+					add(k + 1);
+					break;
+				}
+		} while (!epsq.empty());
+		CSet cs;
+		while (!firsts.empty()) {
+			auto k = firsts.remove();
+			auto t = nodes[k].type;
+			if (t <= WCharMax)
+				cs.set(t);
+			else
+				cs |= csets[nodes[k].args[0]];
+		}
+		return cs;
+	}
 	Regexp *compile() {
 		auto [lhs, nstk, err] = alt(false, 0);
 		if (err) {
@@ -1111,7 +1161,9 @@ struct Compile {
 		} else {
 			lhs.push_back({Node::Exit, {0, 0}, 0});
 		}
-		return new Regexp{ std::move(csets), {lhs.begin(), lhs.end()}, nstk, nsub + 1, enc, err };
+		std::vector<Node> nodes{lhs.begin(), lhs.end()};
+		auto first = firstclosure(nodes);
+		return new Regexp{ std::move(csets), std::move(nodes), std::move(first), nstk, nsub + 1, enc, err };
 	}
 };
 
@@ -1303,8 +1355,16 @@ struct Execute {
 			while (wconv.look() != WConv::End && (std::ptrdiff_t) wconv.off() < rm[0].rm_eo)
 				wcprev = wconv.look(), wconv.nextchr();
 		NState nsinit(allocator);
-		nsinit.boff = wconv.off();
 		auto wcnext = wconv.look();
+		if (r.first.has_value()) {
+		zoom:
+			while (!r.first->test(wcnext)) {
+				if (wcnext == WConv::End)
+					goto exit;
+				wcnext = wconv.nextchr().look();
+			}
+		}
+		nsinit.boff = wconv.off();
 		add(mcsvs[0], 0, 0, nsinit, wcnext);
 		if (!epsq.empty())
 			epsclosure(mcsvs[0], wcnext);
@@ -1317,14 +1377,18 @@ struct Execute {
 				auto [n, ns] = mcsvs[0].remove();
 				add(mcsvs[1], n + 1, nodes[n].nstk, ns, wcnext);
 			}
-			if (!best.has_value()) {
+			if (!best.has_value() && (!r.first.has_value() || r.first->test(wcnext))) {
 				nsinit.boff = wconv.off();
 				add(mcsvs[1], 0, 0, nsinit, wcnext);
 			}
 			if (!epsq.empty())
 				epsclosure(mcsvs[1], wcnext);
-			if (best.has_value() && mcsvs[1].empty())
-				break;
+			if (mcsvs[1].empty()) {
+				if (best.has_value())
+					break;
+				if (r.first.has_value())
+					goto zoom;
+			}
 			if (wcnext == WConv::End)
 				break;
 			++gen;
@@ -1333,15 +1397,20 @@ struct Execute {
 				auto [n, ns] = mcsvs[1].remove();
 				add(mcsvs[0], n + 1, nodes[n].nstk, ns, wcnext);
 			}
-			if (!best.has_value()) {
+			if (!best.has_value() && (!r.first.has_value() || r.first->test(wcnext))) {
 				nsinit.boff = wconv.off();
 				add(mcsvs[0], 0, 0, nsinit, wcnext);
 			}
 			if (!epsq.empty())
 				epsclosure(mcsvs[0], wcnext);
-			if (best.has_value() && mcsvs[0].empty())
-				break;
+			if (mcsvs[0].empty()) {
+				if (best.has_value())
+					break;
+				if (r.first.has_value())
+					goto zoom;
+			}
 		}
+	exit:
 		if (best.has_value()) {
 			if (rm) {
 				std::size_t nsub = std::min(nm, r.nsub);
