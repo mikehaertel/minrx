@@ -419,7 +419,6 @@ struct CSet {
 		}
 	};
 	std::set<Range> ranges;
-	bool inverted = false;
 	CSet &operator|=(const CSet &cs) {
 		for (const auto &e : cs.ranges)
 			set(e.min, e.max);
@@ -434,7 +433,16 @@ struct CSet {
 		roaring_bitmap_free(bitmap);
 		bitmap = inverted;
 #else
-		inverted = true;
+		std::set<Range> nranges;
+		WChar lo = 0;
+		for (const auto &e : ranges) {
+			if (lo < e.min)
+				nranges.emplace(lo, e.min - 1);
+			lo = e.max + 1;
+		}
+		if (lo <= WCharMax)
+			nranges.emplace(lo, WCharMax);
+		ranges = std::move(nranges);
 #endif
 		return *this;
 	}
@@ -481,7 +489,7 @@ struct CSet {
 		if (wc < 0)
 			return false;
 		auto i = ranges.lower_bound(Range(wc, wc));
-		return inverted ^ (i != ranges.end() && wc >= i->min && wc <= i->max);
+		return i != ranges.end() && wc >= i->min && wc <= i->max;
 #endif
 	}
 	bool cclass(minrx_regcomp_flags_t flags, WConv::Encoding enc, const std::string &name) {
@@ -705,6 +713,7 @@ struct Node {
 struct Regexp {
 	const std::vector<CSet> csets;
 	const std::vector<Node> nodes;
+	std::optional<CSet> first;
 	std::size_t nstk;
 	std::size_t nsub;
 	WConv::Encoding enc;
@@ -1099,6 +1108,57 @@ struct Compile {
 		}
 		return {lhs, lhmaxstk, MINRX_REG_SUCCESS};
 	}
+	std::optional<CSet> firstclosure(const std::vector<Node> &nodes) {
+		if (nodes.size() == 0)
+			return {};
+		QSet<NInt> epsq(nodes.size()), epsv(nodes.size()), firsts(nodes.size());
+		auto add = [&epsq, &epsv](NInt n) { if (!epsv.contains(n)) { epsq.insert(n); epsv.insert(n); } };
+		epsq.insert(0);
+		do {
+			auto k = epsq.remove();
+			auto &n = nodes[k];
+			if (n.type <= Node::CSet)
+				firsts.insert(k);
+			else
+				switch (n.type) {
+				case Node::Exit:
+					return {};
+				case Node::Fork:
+					{
+						int t = 0;
+						do {
+							add(k + 1);
+							k = k + 1 + nodes[k].args[1];
+							t++;
+						} while (nodes[k].type != Node::Join);
+						if (t == 1)
+							add(k);
+					}
+					break;
+				case Node::Goto:
+					add(k + 1 + n.args[1]);
+					break;
+				case Node::Loop:
+					add(k + 1);
+					if (n.args[1])
+						add(k + 1 + n.args[0]);
+					break;
+				default:
+					add(k + 1);
+					break;
+				}
+		} while (!epsq.empty());
+		CSet cs;
+		while (!firsts.empty()) {
+			auto k = firsts.remove();
+			auto t = nodes[k].type;
+			if (t <= WCharMax)
+				cs.set(t);
+			else
+				cs |= csets[nodes[k].args[0]];
+		}
+		return cs;
+	}
 	Regexp *compile() {
 		auto [lhs, nstk, err] = alt(false, 0);
 		if (err) {
@@ -1109,7 +1169,9 @@ struct Compile {
 		} else {
 			lhs.push_back({Node::Exit, {0, 0}, 0});
 		}
-		return new Regexp{ std::move(csets), {lhs.begin(), lhs.end()}, nstk, nsub + 1, enc, err };
+		std::vector<Node> nodes{lhs.begin(), lhs.end()};
+		auto first = firstclosure(nodes);
+		return new Regexp{ std::move(csets), std::move(nodes), std::move(first), nstk, nsub + 1, enc, err };
 	}
 };
 
@@ -1286,11 +1348,20 @@ struct Execute {
 			while (wconv.look() != WConv::End && (std::ptrdiff_t) wconv.off() < rm[0].rm_eo)
 				lookback = wconv.look(), wconv.nextchr();
 		NState nsinit(allocator);
+		auto wc = wconv.look();
+		if (r.first.has_value()) {
+		zoom:
+			while (!r.first->test(wc)) {
+				if (wc == WConv::End)
+					goto exit;
+				wconv.nextchr();
+				wc = wconv.look();
+			}
+		}
 		nsinit.boff = wconv.off();
 		add(mcsvs[0], 0, nsinit);
 		if (!epsq.empty())
 			epsclosure(mcsvs[0]);
-		auto wc = wconv.look();
 		for (;;) { // unrolled to ping-pong roles of mcsvs[0]/[1]
 			if (wc == WConv::End)
 				break;
@@ -1308,14 +1379,18 @@ struct Execute {
 				add(mcsvs[1], n + 1, ns);
 			}
 			wconv.nextchr(), lookback = wc, wc = wconv.look();
-			if (!best.has_value()) {
+			if (!best.has_value() && (!r.first.has_value() || r.first->test(wc))) {
 				nsinit.boff = wconv.off();
 				add(mcsvs[1], 0, nsinit);
 			}
 			if (!epsq.empty())
 				epsclosure(mcsvs[1]);
-			if (best.has_value() && mcsvs[1].empty())
-				break;
+			if (mcsvs[1].empty()) {
+				if (best.has_value())
+					break;
+				if (r.first.has_value())
+					goto zoom;
+			}
 			if (wc == WConv::End)
 				break;
 			epsv.clear();
@@ -1332,15 +1407,20 @@ struct Execute {
 				add(mcsvs[0], n + 1, ns);
 			}
 			wconv.nextchr(), lookback = wc, wc = wconv.look();
-			if (!best.has_value()) {
+			if (!best.has_value() && (!r.first.has_value() || r.first->test(wc))) {
 				nsinit.boff = wconv.off();
 				add(mcsvs[0], 0, nsinit);
 			}
 			if (!epsq.empty())
 				epsclosure(mcsvs[0]);
-			if (best.has_value() && mcsvs[0].empty())
-				break;
+			if (mcsvs[0].empty()) {
+				if (best.has_value())
+					break;
+				if (r.first.has_value())
+					goto zoom;
+			}
 		}
+	exit:
 		if (best.has_value()) {
 			if (rm) {
 				std::size_t nsub = std::min(nm, r.nsub);
