@@ -1354,8 +1354,7 @@ struct Execute {
 			while (!r.first->test(wc)) {
 				if (wc == WConv::End)
 					goto exit;
-				wconv.nextchr();
-				wc = wconv.look();
+				lookback = wconv.look(), wconv.nextchr(), wc = wconv.look();
 			}
 		}
 		nsinit.boff = wconv.off();
