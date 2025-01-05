@@ -26,6 +26,8 @@
 // SUCH DAMAGE.
 //
 
+#include <algorithm>
+#include <array>
 #include <cctype>
 #include <climits>
 #include <clocale>
@@ -34,7 +36,6 @@
 #include <cstring>
 #include <cwchar>
 #include <cwctype>
-#include <algorithm>
 #include <deque>
 #include <initializer_list>
 #include <limits>
@@ -284,7 +285,7 @@ class WConv {
 public:
 	enum { End = -1 };
 	enum class Encoding { Byte, MBtoWC, UTF8 };
-private:
+//private:
 	WConv &(WConv::*const nextfn)();
 	const char *const bp;
 	const char *const ep;
@@ -709,7 +710,8 @@ struct Node {
 struct Regexp {
 	const std::vector<CSet> csets;
 	const std::vector<Node> nodes;
-	std::optional<CSet> first;
+	std::optional<const CSet> firstcset;
+	std::optional<const std::array<bool, 256>> firstbyte;
 	std::size_t nstk;
 	std::size_t nsub;
 	WConv::Encoding enc;
@@ -1151,6 +1153,65 @@ struct Compile {
 		}
 		return cs;
 	}
+	static unsigned int utfprefix(WChar wc) {
+		if (wc < 0x80)
+			return wc;
+		if (wc < 0x800)
+			return 0xC0 + (wc >> 6);
+		if (wc < 0x10000)
+			return 0xE0 + (wc >> 12);
+		if (wc < 0x100000)
+			return 0xF0 + (wc >> 18);
+		return 0xF4;
+	}
+	std::optional<const std::array<bool, 256>> firstbyte(WConv::Encoding e, const std::optional<CSet>& firstcset) {
+		if (!firstcset.has_value())
+			return {};
+		std::array<bool, 256> fb = {};
+#ifdef ROARING
+		roaring_uint32_iterator_t *i;
+#endif
+		switch (e) {
+		case WConv::Encoding::Byte:
+#ifdef ROARING
+			i = roaring_iterator_create(firstcset->bitmap);
+			while (i->has_value) {
+				if (i->current_value > 255)
+					break;
+				fb[i->current_value] = true;
+				roaring_uint32_iterator_advance(i);
+			}
+			roaring_uint32_iterator_free(i);
+#else
+			for (const auto &r : firstcset->ranges) {
+				if (r.min > 255)
+					break;
+				auto lo = r.min, hi = std::min(255, r.max);
+				for (auto b = lo; b <= hi; b++)
+					fb[b] = true;
+			}
+#endif
+			return fb;
+		case WConv::Encoding::UTF8:
+#ifdef ROARING
+			i = roaring_iterator_create(firstcset->bitmap);
+			while (i->has_value) {
+				fb[utfprefix(i->current_value)] = true;
+				roaring_uint32_iterator_advance(i);
+			}
+			roaring_uint32_iterator_free(i);
+#else
+			for (const auto &r : firstcset->ranges) {
+				auto lo = utfprefix(r.min), hi = utfprefix(r.max);
+				for (auto b = lo; b <= hi; b++)
+					fb[b] = true;
+			}
+#endif
+			return fb;
+		default:
+			return {};
+		}
+	}
 	Regexp *compile() {
 		auto [lhs, nstk, err] = alt(false, 0);
 		if (err) {
@@ -1162,8 +1223,9 @@ struct Compile {
 			lhs.push_back({Node::Exit, {0, 0}, 0});
 		}
 		std::vector<Node> nodes{lhs.begin(), lhs.end()};
-		auto first = firstclosure(nodes);
-		return new Regexp{ std::move(csets), std::move(nodes), std::move(first), nstk, nsub + 1, enc, err };
+		auto fc = firstclosure(nodes);
+		auto fb = firstbyte(enc, fc);
+		return new Regexp{ std::move(csets), std::move(nodes), std::move(fc), std::move(fb), nstk, nsub + 1, enc, err };
 	}
 };
 
@@ -1356,12 +1418,33 @@ struct Execute {
 				wcprev = wconv.look(), wconv.nextchr();
 		NState nsinit(allocator);
 		auto wcnext = wconv.look();
-		if (r.first.has_value()) {
+		if (r.firstcset.has_value()) {
 		zoom:
-			while (!r.first->test(wcnext)) {
-				if (wcnext == WConv::End)
+			if (r.firstbyte.has_value()) {
+				auto cp = wconv.cp, ep = wconv.ep;
+				auto firstbyte = *r.firstbyte;
+				while (cp != ep && !firstbyte[(unsigned char) *cp])
+					++cp;
+				if (cp == ep)
 					goto exit;
-				wcprev = wcnext, wcnext = wconv.nextchr().look();
+				if (cp > wconv.cp) {
+					if (r.enc == WConv::Encoding::UTF8) {
+						auto bp = cp;
+						while (bp != wconv.cp && cp - bp < 8 && (unsigned char) *--bp >= 0x80)
+							;
+						wconv.cp = (unsigned char) *bp >= 0x80 ? cp - 1 : bp;
+					} else {
+						wconv.cp = cp - 1;
+					}
+					wconv.len = 0;
+					wcprev = wcnext, wcnext = wconv.nextchr().look();
+				}
+			} else {
+				while (!r.firstcset->test(wcnext)) {
+					if (wcnext == WConv::End)
+						goto exit;
+					wcprev = wcnext, wcnext = wconv.nextchr().look();
+				}
 			}
 		}
 		nsinit.boff = wconv.off();
@@ -1377,7 +1460,7 @@ struct Execute {
 				auto [n, ns] = mcsvs[0].remove();
 				add(mcsvs[1], n + 1, nodes[n].nstk, ns, wcnext);
 			}
-			if (!best.has_value() && (!r.first.has_value() || r.first->test(wcnext))) {
+			if (!best.has_value() && (!r.firstcset.has_value() || r.firstcset->test(wcnext))) {
 				nsinit.boff = wconv.off();
 				add(mcsvs[1], 0, 0, nsinit, wcnext);
 			}
@@ -1386,7 +1469,7 @@ struct Execute {
 			if (mcsvs[1].empty()) {
 				if (best.has_value())
 					break;
-				if (r.first.has_value())
+				if (r.firstcset.has_value())
 					goto zoom;
 			}
 			if (wcnext == WConv::End)
@@ -1397,7 +1480,7 @@ struct Execute {
 				auto [n, ns] = mcsvs[1].remove();
 				add(mcsvs[0], n + 1, nodes[n].nstk, ns, wcnext);
 			}
-			if (!best.has_value() && (!r.first.has_value() || r.first->test(wcnext))) {
+			if (!best.has_value() && (!r.firstcset.has_value() || r.firstcset->test(wcnext))) {
 				nsinit.boff = wconv.off();
 				add(mcsvs[0], 0, 0, nsinit, wcnext);
 			}
@@ -1406,7 +1489,7 @@ struct Execute {
 			if (mcsvs[0].empty()) {
 				if (best.has_value())
 					break;
-				if (r.first.has_value())
+				if (r.firstcset.has_value())
 					goto zoom;
 			}
 		}
