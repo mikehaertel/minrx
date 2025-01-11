@@ -44,7 +44,6 @@
 #include <string>
 #include <tuple>
 #include <vector>
-#define ROARING	1
 #ifdef CHARSET
 #include <memory>
 #include "charset.h"
@@ -495,8 +494,7 @@ struct CSet {
 				charset_add_cclass(charset, "lower");	// FIXME: Add error checking
 		}
 		return result == CSET_SUCCESS;
-#else
-		// This code should work for ROARING and Mike's original CSet implementation
+#else // both ROARING as well as original CSet
 		auto wct = std::wctype(name.c_str());
 		if (wct) {
 			std::string key = name + ":" + std::setlocale(LC_CTYPE, NULL) + ":" + ((flags & MINRX_REG_ICASE) != 0 ? "1" : "0");
@@ -599,10 +597,7 @@ struct CSet {
 					wc = wconv.nextchr().look();
 					if (wc != L'=' || (wc = wconv.nextchr().look() != L']'))
 						return MINRX_REG_ECOLLATE;
-#elif defined(ROARING)
-					// FIXME: recognize some equivalence classes.
-					return MINRX_REG_ECOLLATE;
-#else
+#else // both ROARING as well as original CSet
 					// FIXME: recognize some equivalence classes.
 					return MINRX_REG_ECOLLATE;
 #endif
