@@ -713,7 +713,8 @@ struct Regexp {
 	const std::vector<CSet> csets;
 	const std::vector<Node> nodes;
 	std::optional<const CSet> firstcset;
-	std::optional<const std::array<bool, 256>> firstbyte;
+	std::optional<const std::array<bool, 256>> firstbytes;
+	std::optional<char> firstunique;
 	std::size_t nstk;
 	std::size_t nsub;
 	WConv::Encoding enc;
@@ -1172,13 +1173,21 @@ struct Compile {
 			return 0xF0 + (wc >> 18);
 		return 0xF4;
 	}
-	std::optional<const std::array<bool, 256>> firstbyte(WConv::Encoding e, const std::optional<CSet>& firstcset) {
+	std::pair<std::optional<const std::array<bool, 256>>, std::optional<char>>
+	firstbytes(WConv::Encoding e, const std::optional<CSet>& firstcset) {
 		if (!firstcset.has_value())
 			return {};
 		std::array<bool, 256> fb = {};
 #ifdef ROARING
 		roaring_uint32_iterator_t *i;
 #endif
+		auto firstunique = [](const std::array<bool, 256> &fb) -> std::optional<char> {
+			int n = 0, u = -1;
+			for (int i = 0; i < 256; ++i)
+				if (fb[i])
+					++n, u = i;
+			return n == 1 ? std::optional<char>(u) : std::optional<char>();
+		};
 		switch (e) {
 		case WConv::Encoding::Byte:
 #ifdef ROARING
@@ -1199,7 +1208,7 @@ struct Compile {
 					fb[b] = true;
 			}
 #endif
-			return fb;
+			return {fb, firstunique(fb)};
 		case WConv::Encoding::UTF8:
 #ifdef ROARING
 			i = roaring_iterator_create(firstcset->bitmap);
@@ -1215,9 +1224,9 @@ struct Compile {
 					fb[b] = true;
 			}
 #endif
-			return fb;
+			return {fb, firstunique(fb)};
 		default:
-			return {};
+			return {{}, {}};
 		}
 	}
 	Regexp *compile() {
@@ -1232,8 +1241,8 @@ struct Compile {
 		}
 		std::vector<Node> nodes{lhs.begin(), lhs.end()};
 		auto fc = firstclosure(nodes);
-		auto fb = firstbyte(enc, fc);
-		return new Regexp{ std::move(csets), std::move(nodes), std::move(fc), std::move(fb), nstk, nsub + 1, enc, err };
+		auto [fb, fu] = firstbytes(enc, fc);
+		return new Regexp{ std::move(csets), std::move(nodes), std::move(fc), std::move(fb), std::move(fu), nstk, nsub + 1, enc, err };
 	}
 };
 
@@ -1418,14 +1427,20 @@ struct Execute {
 		auto wcnext = wconv.look();
 		if (r.firstcset.has_value()) {
 		zoom:
-			if (r.firstbyte.has_value()) {
+			if (r.firstbytes.has_value()) {
 				auto cp = wconv.cp, ep = wconv.ep;
-				auto firstbyte = *r.firstbyte;
-				while (cp != ep && !firstbyte[(unsigned char) *cp])
-					++cp;
-				if (cp == ep)
-					goto exit;
-				if (cp > wconv.cp) {
+				if (r.firstunique.has_value()) {
+					cp = (const char *) std::memchr(cp, *r.firstunique, ep - cp);
+					if (cp == nullptr)
+						goto exit;
+				} else {
+					auto firstbytes = *r.firstbytes;
+					while (cp != ep && !firstbytes[(unsigned char) *cp])
+						++cp;
+					if (cp == ep)
+						goto exit;
+				}
+				if (cp != wconv.cp) {
 					if (r.enc == WConv::Encoding::UTF8) {
 						auto bp = cp;
 						while (bp != wconv.cp && cp - bp < 8 && (unsigned char) *--bp >= 0x80)
