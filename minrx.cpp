@@ -641,18 +641,10 @@ struct CSet {
 			if (wclo >= 0) {
 				set(wclo, wchi);
 				if ((flags & MINRX_REG_ICASE) != 0) {
-#ifdef CHARSET
-					if (std::iswlower(wclo) && std::iswlower(wchi)) {
-						set(std::towupper(wclo), std::towupper(wchi));
-					} else if (std::iswupper(wclo) && std::iswupper(wchi)) {
-						set(std::towlower(wclo), std::towlower(wchi));
-					}
-#else
 					for (auto wc = wclo; wc <= wchi; ++wc) {
 						set(enc == WConv::Encoding::Byte ? std::tolower(wc) : std::towlower(wc));
 						set(enc == WConv::Encoding::Byte ? std::toupper(wc) : std::towupper(wc));
 					}
-#endif
 				}
 			}
 			if (range && wc == L'-' && wconv.lookahead() != L']')
