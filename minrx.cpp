@@ -668,6 +668,71 @@ struct CSet {
 		}
 		return MINRX_REG_SUCCESS;
 	}
+	static unsigned int utfprefix(WChar wc) {
+		if (wc < 0x80)
+			return wc;
+		if (wc < 0x800)
+			return 0xC0 + (wc >> 6);
+		if (wc < 0x10000)
+			return 0xE0 + (wc >> 12);
+		if (wc < 0x100000)
+			return 0xF0 + (wc >> 18);
+		return 0xF4;
+	}
+	std::pair<std::optional<const std::array<bool, 256>>, std::optional<char>>
+	firstbytes(WConv::Encoding e) const {
+		std::array<bool, 256> fb = {};
+#ifdef ROARING
+		roaring_uint32_iterator_t *i;
+#endif
+		auto firstunique = [](const std::array<bool, 256> &fb) -> std::optional<char> {
+			int n = 0, u = -1;
+			for (int i = 0; i < 256; ++i)
+				if (fb[i])
+					++n, u = i;
+			return n == 1 ? std::optional<char>(u) : std::optional<char>();
+		};
+		switch (e) {
+		case WConv::Encoding::Byte:
+#ifdef ROARING
+			i = roaring_iterator_create(bitmap);
+			while (i->has_value) {
+				if (i->current_value > 255)
+					break;
+				fb[i->current_value] = true;
+				roaring_uint32_iterator_advance(i);
+			}
+			roaring_uint32_iterator_free(i);
+#else
+			for (const auto &r : ranges) {
+				if (r.min > 255)
+					break;
+				auto lo = r.min, hi = std::min(255, r.max);
+				for (auto b = lo; b <= hi; b++)
+					fb[b] = true;
+			}
+#endif
+			return {fb, firstunique(fb)};
+		case WConv::Encoding::UTF8:
+#ifdef ROARING
+			i = roaring_iterator_create(bitmap);
+			while (i->has_value) {
+				fb[utfprefix(i->current_value)] = true;
+				roaring_uint32_iterator_advance(i);
+			}
+			roaring_uint32_iterator_free(i);
+#else
+			for (const auto &r : ranges) {
+				auto lo = utfprefix(r.min), hi = utfprefix(r.max);
+				for (auto b = lo; b <= hi; b++)
+					fb[b] = true;
+			}
+#endif
+			return {fb, firstunique(fb)};
+		default:
+			return {{}, {}};
+		}
+	}
 };
 
 #ifndef CHARSET
@@ -1227,72 +1292,11 @@ struct Compile {
 		}
 		return cs;
 	}
-	static unsigned int utfprefix(WChar wc) {
-		if (wc < 0x80)
-			return wc;
-		if (wc < 0x800)
-			return 0xC0 + (wc >> 6);
-		if (wc < 0x10000)
-			return 0xE0 + (wc >> 12);
-		if (wc < 0x100000)
-			return 0xF0 + (wc >> 18);
-		return 0xF4;
-	}
 	std::pair<std::optional<const std::array<bool, 256>>, std::optional<char>>
 	firstbytes(WConv::Encoding e, const std::optional<CSet>& firstcset) {
 		if (!firstcset.has_value())
 			return {};
-		std::array<bool, 256> fb = {};
-#ifdef ROARING
-		roaring_uint32_iterator_t *i;
-#endif
-		auto firstunique = [](const std::array<bool, 256> &fb) -> std::optional<char> {
-			int n = 0, u = -1;
-			for (int i = 0; i < 256; ++i)
-				if (fb[i])
-					++n, u = i;
-			return n == 1 ? std::optional<char>(u) : std::optional<char>();
-		};
-		switch (e) {
-		case WConv::Encoding::Byte:
-#ifdef ROARING
-			i = roaring_iterator_create(firstcset->bitmap);
-			while (i->has_value) {
-				if (i->current_value > 255)
-					break;
-				fb[i->current_value] = true;
-				roaring_uint32_iterator_advance(i);
-			}
-			roaring_uint32_iterator_free(i);
-#else
-			for (const auto &r : firstcset->ranges) {
-				if (r.min > 255)
-					break;
-				auto lo = r.min, hi = std::min(255, r.max);
-				for (auto b = lo; b <= hi; b++)
-					fb[b] = true;
-			}
-#endif
-			return {fb, firstunique(fb)};
-		case WConv::Encoding::UTF8:
-#ifdef ROARING
-			i = roaring_iterator_create(firstcset->bitmap);
-			while (i->has_value) {
-				fb[utfprefix(i->current_value)] = true;
-				roaring_uint32_iterator_advance(i);
-			}
-			roaring_uint32_iterator_free(i);
-#else
-			for (const auto &r : firstcset->ranges) {
-				auto lo = utfprefix(r.min), hi = utfprefix(r.max);
-				for (auto b = lo; b <= hi; b++)
-					fb[b] = true;
-			}
-#endif
-			return {fb, firstunique(fb)};
-		default:
-			return {{}, {}};
-		}
+		return firstcset->firstbytes(e);
 	}
 	Regexp *compile() {
 		if (((flags & MINRX_REG_MINDISABLE) != 0 && (flags & (MINRX_REG_MINIMAL | MINRX_REG_MINGLOBAL | MINRX_REG_MINSCOPED | MINRX_REG_RPTMINFAST | MINRX_REG_RPTMINSLOW)) != 0)
