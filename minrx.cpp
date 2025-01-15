@@ -1231,7 +1231,7 @@ struct Compile {
 	firstbytes(WConv::Encoding e, const std::optional<CSet>& firstcset) {
 		if (!firstcset.has_value())
 			return {};
-		return firstcset.value().firstbytes(e);
+		return firstcset->firstbytes(e);
 	}
 	Regexp *compile() {
 		auto [lhs, nstk, err] = alt(false, 0);
