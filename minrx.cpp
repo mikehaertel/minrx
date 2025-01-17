@@ -530,6 +530,24 @@ struct CSet {
 		return false;
 #endif
 	}
+#ifndef CHARSET
+	void add_equiv(int32_t equiv) {
+		wchar_t wcs_in[2];
+		wchar_t wcs[2];
+		wchar_t abuf[100], wbuf[100];
+
+		wcs_in[0] = equiv;
+		wcs_in[1] = 0;
+		wcsxfrm(abuf, wcs_in, 99);
+		wcs[1] = 0;
+		for (wchar_t u = 1; u <= WCharMax; ++u) {
+			wcs[0] = u;
+			wcsxfrm(wbuf, wcs, 99);
+			if (abuf[0] == wbuf[0])
+				set(u);
+		}
+	}
+#endif
 	minrx_result_t parse(minrx_regcomp_flags_t flags, WConv::Encoding enc, WConv &wconv) {
 		auto wc = wconv.nextchr().look();
 		bool inv = wc == L'^';
@@ -584,9 +602,9 @@ struct CSet {
 						continue;
 					return MINRX_REG_ECTYPE;
 				} else if (wc == L'=') {
-#ifdef CHARSET
 					wc = wconv.nextchr().look();
 					wclo = wchi = wc;
+#ifdef CHARSET
 					charset_add_equiv(charset, wc);	// FIXME: No error checking
 					if ((flags & MINRX_REG_ICASE) != 0) {
 						if (std::iswlower(wc))
@@ -594,13 +612,18 @@ struct CSet {
 						else if (std::iswupper(wc))
 							charset_add_equiv(charset, std::towlower(wc));	// FIXME: no error checking
 					}
+#else // both ROARING as well as original CSet
+					add_equiv(wc);
+					if ((flags & MINRX_REG_ICASE) != 0) {
+						if (std::iswlower(wc))
+							add_equiv(std::towupper(wc));
+						else if (std::iswupper(wc))
+							add_equiv(std::towlower(wc));
+					}
+#endif
 					wc = wconv.nextchr().look();
 					if (wc != L'=' || (wc = wconv.nextchr().look() != L']'))
 						return MINRX_REG_ECOLLATE;
-#else // both ROARING as well as original CSet
-					// FIXME: recognize some equivalence classes.
-					return MINRX_REG_ECOLLATE;
-#endif
 				}
 			}
 			bool range = false;
