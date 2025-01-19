@@ -1147,20 +1147,22 @@ struct Execute {
 	std::optional<COWVec<std::size_t, (std::size_t) -1>> best;
 	QSet<NInt> epsq { r.nodes.size() };
 	QVec<NInt, NState> epsv { r.nodes.size() };
+	const Node *nodes = r.nodes.data();
 	Execute(const Regexp &r, minrx_regexec_flags_t flags, const char *bp, const char *ep) : r(r), flags(flags), wconv(r.enc, bp, ep) {}
-	void add(QVec<NInt, NState> &ncsv, NInt n, const NState &ns) {
-		if (r.nodes[n].type <= Node::CSet) {
-			auto [newly, oldns] = ncsv.insert(n, ns);
-			if (!newly && ns.cmpgt(oldns, r.nodes[n].nstk))
+	inline void add(QVec<NInt, NState> &ncsv, NInt k, const NState &ns) {
+		const Node &n = nodes[k];
+		if (n.type <= Node::CSet) {
+			auto [newly, oldns] = ncsv.insert(k, ns);
+			if (!newly && ns.cmpgt(oldns, n.nstk))
 				oldns = ns;
 		} else {
-			auto [newly, oldns] = epsv.insert(n, ns);
-			if (newly || (ns.cmpgt(oldns, r.nodes[n].nstk) && (oldns = ns, true)))
-				epsq.insert(n);
+			auto [newly, oldns] = epsv.insert(k, ns);
+			if (newly || (ns.cmpgt(oldns, n.nstk) && (oldns = ns, true)))
+				epsq.insert(k);
 		}
 	}
 	void epsclosure(QVec<NInt, NState> &ncsv) {
-		auto nodes = r.nodes.data();
+		auto nodes = this->nodes;
 		auto is_word = r.enc == WConv::Encoding::Byte ? [](WChar b) { return b == '_' || std::isalnum(b); }
 							      : [](WChar wc) { return wc == L'_' || std::iswalnum(wc); };
 		do {
@@ -1295,7 +1297,7 @@ struct Execute {
 	}
 	int execute(std::size_t nm, minrx_regmatch_t *rm) {
 		QVec<NInt, NState> mcsvs[2] { r.nodes.size(), r.nodes.size() };
-		auto nodes = &r.nodes[0];
+		auto nodes = this->nodes;
 		wconv.nextchr();
 		if ((flags & MINRX_REG_RESUME) != 0 && rm && rm[0].rm_eo > 0)
 			while (wconv.look() != WConv::End && (std::ptrdiff_t) wconv.off() < rm[0].rm_eo)
