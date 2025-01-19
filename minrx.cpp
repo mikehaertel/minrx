@@ -1160,7 +1160,7 @@ struct Execute {
 		}
 	}
 	void epsclosure(QVec<NInt, NState> &ncsv) {
-		auto nodes = r.nodes;
+		auto nodes = r.nodes.data();
 		auto is_word = r.enc == WConv::Encoding::Byte ? [](WChar b) { return b == '_' || std::isalnum(b); }
 							      : [](WChar wc) { return wc == L'_' || std::iswalnum(wc); };
 		do {
