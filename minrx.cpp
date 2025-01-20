@@ -419,7 +419,6 @@ struct CSet {
 		}
 	};
 	std::set<Range> ranges;
-	bool inverted = false;
 	CSet &operator|=(const CSet &cs) {
 		for (const auto &e : cs.ranges)
 			set(e.min, e.max);
@@ -434,7 +433,16 @@ struct CSet {
 		roaring_bitmap_free(bitmap);
 		bitmap = inverted;
 #else
-		inverted = true;
+		std::set<Range> nranges;
+		WChar lo = 0;
+		for (const auto &e : ranges) {
+			if (lo < e.min)
+				nranges.emplace(lo, e.min - 1);
+			lo = e.max + 1;
+		}
+		if (lo <= WCharMax)
+			nranges.emplace(lo, WCharMax);
+		ranges = std::move(nranges);
 #endif
 		return *this;
 	}
@@ -481,7 +489,7 @@ struct CSet {
 		if (wc < 0)
 			return false;
 		auto i = ranges.lower_bound(Range(wc, wc));
-		return inverted ^ (i != ranges.end() && wc >= i->min && wc <= i->max);
+		return i != ranges.end() && wc >= i->min && wc <= i->max;
 #endif
 	}
 	bool cclass(minrx_regcomp_flags_t flags, WConv::Encoding enc, const std::string &name) {
