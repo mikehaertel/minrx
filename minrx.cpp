@@ -182,60 +182,54 @@ struct COWVec {
 template <typename UINT>
 struct QSet {
 	std::uint64_t *bits[10];
-	unsigned int depth = 0;
+	int depth = 0;
 	QSet(UINT limit) {
 		std::size_t s[10], t = 0;
 		do
 			t += (limit = s[depth++] = (limit + 63u) / 64u);
 		while (limit > 1);
-		bits[0] = (std::uint64_t *) ::operator new(t * sizeof (std::uint64_t));
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
-#endif
-		for (unsigned int i = 1; i < depth; ++i)
-			bits[i] = bits[i - 1] + s[i - 1];
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
-		bits[depth - 1][0] = 0;
+		std::uint64_t *next = (std::uint64_t *) ::operator new(t * sizeof (std::uint64_t));
+		for (int i = 0; i < depth; ++i)
+			bits[i] = next, next += s[depth - 1 - i];
+		bits[0][0] = 0;
 	}
 	~QSet() { ::operator delete(bits[0]); }
-	bool contains(UINT k) const {
-		for (auto d = depth; d > 0; ) {
-			std::size_t idx = k >> 6 * d;
-			unsigned int bit = (k >> 6 * --d) & 0x3f;
-			if ((bits[d][idx] & ((std::uint64_t) 1 << bit)) == 0)
-				return false;
-		}
-		return true;
-	}
-	bool empty() const { return !bits[depth - 1][0]; }
-	UINT remove() {
-		UINT k = 0;
-		auto d = depth;
-		do {
-			auto m = bits[--d][k];
-			k = (k << 6) | ctz(m);
-		} while (d != 0);
-		UINT r = k;
-		for (; d < depth && !(bits[d][k >> 6] &= ~((std::uint64_t) 1 << (k & 0x3f))); k >>= 6, ++d)
-			;
-		return r;
-	}
+	inline static std::uint64_t bit(UINT k) { return (std::uint64_t) 1 << (k & 0x3F); }
+	bool empty() const { return !bits[0][0]; }
 	bool insert(UINT k) {
 		bool r = false;
-		for (auto d = depth; d-- != 0; ) {
-			auto bp = bits[d] + ((k >> 6 * d) >> 6);
-			std::uint64_t m = (std::uint64_t) 1 << ((k >> 6 * d) & 0x3f);
-			if ((*bp & m) == 0) {
-				if (d)
-					bits[d - 1][k >> (6 * d)] = 0;
+		int i = 0, s = 6 * depth;
+		UINT j = 0;
+		while (i < depth) {
+			auto bp = &bits[i++][j];
+			auto x = *bp;
+			s -= 6;
+			j = k >> s;
+			auto w = bit(j);
+			if ((x & w) == 0) {
+				if (i < depth)
+					bits[i][j] = 0;
 				else
 					r = true;
 			}
-			*bp |= m;
+			*bp = x | w;
 		}
+		return r;
+	}
+	UINT remove() { // caller must ensure !empty()
+		UINT k = 0;
+		int i = 0, d = depth;
+		do
+			k = (k << 6) | ctz(bits[i++][k]);
+		while (i != d);
+		UINT r = k;
+		do {
+			--i;
+			auto w = bit(k);
+			k >>= 6;
+			if ((bits[i][k] &= ~w) != 0)
+				break;
+		} while (i != 0);
 		return r;
 	}
 };
@@ -255,7 +249,6 @@ struct QVec {
 			storage[i].~DATA();
 		}
 	}
-	bool contains(UINT k) const { return qset.contains(k); }
 	bool empty() const { return qset.empty(); }
 	std::tuple<bool, DATA&> insert(UINT k, const DATA& v) {
 		bool r = qset.insert(k);
