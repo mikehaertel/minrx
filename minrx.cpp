@@ -71,7 +71,7 @@ template <typename UINT> inline auto ctz(UINT x) { return __builtin_ctz(x); }
 template <> inline auto ctz(unsigned long x) { return __builtin_ctzl(x); }
 template <> inline auto ctz(unsigned long long x) { return __builtin_ctzll(x); }
 
-template <typename TYPE>
+template <typename TYPE, TYPE INIT = 0>
 struct COWVec {
 	struct Storage;
 	struct Allocator {
@@ -96,8 +96,9 @@ struct COWVec {
 			} else {
 				void *p = ::operator new(sizeof (Storage) + (length - 1) * sizeof (TYPE));
 				r = new (p) Storage(*this);
-				std::memset(&(*r)[0], 0, length * sizeof (TYPE));
 			}
+			for (std::size_t i = 0; i != length; ++i)
+				(*r)[i] = INIT;
 			return r;
 		}
 		void dealloc(Storage *s) {
@@ -1129,7 +1130,7 @@ struct Compile {
 };
 
 struct Execute {
-	typedef COWVec<std::size_t> Vec;
+	typedef COWVec<std::size_t, (std::size_t) -1> Vec;
 	struct NState {
 		std::size_t boff;
 		Vec substack;
@@ -1144,7 +1145,7 @@ struct Execute {
 	WConv wconv;
 	WChar wcprev = WConv::End;
 	Vec::Allocator allocator { r.nstk + 2 * r.nsub };
-	std::optional<COWVec<std::size_t>> best;
+	std::optional<COWVec<std::size_t, (std::size_t) -1>> best;
 	QSet<NInt> epsq { r.nodes.size() };
 	QVec<NInt, NState> epsv { r.nodes.size() };
 	const Node *nodes = r.nodes.data();
