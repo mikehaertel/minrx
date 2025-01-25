@@ -47,8 +47,6 @@
 #ifdef CHARSET
 #include <memory>
 #include "charset.h"
-#elif defined(ROARING)
-#include "roaring.h"
 #endif
 #include "minrx.h"
 
@@ -399,22 +397,6 @@ struct CSet {
 	CSet(CSet &&cs): charset(cs.charset) { cs.charset = nullptr; }
 	CSet &operator=(CSet &&cs) { charset = cs.charset; cs.charset = nullptr; return *this; }
 	~CSet() { if (charset) { charset_free(charset); charset = nullptr; } }
-#elif defined(ROARING)
-	static std::map<std::string, CSet> cclmemo;
-	static std::mutex cclmutex;
-	roaring_bitmap_t *bitmap = nullptr;
-	CSet() {
-		bitmap = roaring_bitmap_create();
-	}
-	CSet &operator=(const CSet &) = delete;
-	CSet(CSet &&cs): bitmap(cs.bitmap) { cs.bitmap = nullptr; }
-	CSet(const CSet &cs): bitmap(roaring_bitmap_copy(cs.bitmap)) { } // copy constructor
-	CSet &operator=(CSet &&cs) { bitmap = cs.bitmap; cs.bitmap = nullptr; return *this; }
-	~CSet() { if (bitmap) { roaring_bitmap_free(bitmap); bitmap = nullptr; } }
-	CSet &operator|=(const CSet &cs) {
-		roaring_bitmap_or_inplace(bitmap, cs.bitmap);
-		return *this;
-	}
 #else
 	static std::map<std::string, CSet> cclmemo;
 	static std::mutex cclmutex;
@@ -435,10 +417,6 @@ struct CSet {
 	CSet &invert() {
 #ifdef CHARSET
 		charset_invert(charset); // FIXME: no error checking
-#elif defined(ROARING)
-		roaring_bitmap_t *inverted = roaring_bitmap_flip_closed(bitmap, 0, WCharMax);
-		roaring_bitmap_free(bitmap);
-		bitmap = inverted;
 #else
 		std::set<Range> nranges;
 		WChar lo = 0;
@@ -456,8 +434,6 @@ struct CSet {
 	CSet &set(WChar wclo, WChar wchi) {
 #ifdef CHARSET
 		charset_add_range(charset, wclo, wchi);	// FIXME: no error checking
-#elif defined(ROARING)
-		roaring_bitmap_add_range_closed(bitmap, wclo, wchi);
 #else
 		auto e = Range(wclo - (wclo != std::numeric_limits<WChar>::min()), wchi + (wchi != std::numeric_limits<WChar>::max()));
 		auto [x, y] = ranges.equal_range(e);
@@ -480,9 +456,6 @@ struct CSet {
 #ifdef CHARSET
 		charset_add_char(charset, wc);	// FIXME: no error checking
 		return *this;
-#elif defined(ROARING)
-		roaring_bitmap_add(bitmap, wc);
-		return *this;
 #else
 		return set(wc, wc);
 #endif
@@ -490,8 +463,6 @@ struct CSet {
 	bool test(WChar wc) const {
 #ifdef CHARSET
 		return charset_in_set(charset, wc);
-#elif defined(ROARING)
-		return roaring_bitmap_contains(bitmap, wc);
 #else
 		if (wc < 0)
 			return false;
@@ -509,7 +480,7 @@ struct CSet {
 				charset_add_cclass(charset, "lower");	// FIXME: Add error checking
 		}
 		return result == CSET_SUCCESS;
-#else // both ROARING as well as original CSet
+#else
 		auto wct = std::wctype(name.c_str());
 		if (wct) {
 			std::string key = name + ":" + std::setlocale(LC_CTYPE, NULL) + ":" + ((flags & MINRX_REG_ICASE) != 0 ? "1" : "0");
@@ -627,7 +598,7 @@ struct CSet {
 						else if (std::iswupper(wc))
 							charset_add_equiv(charset, std::towlower(wc));	// FIXME: no error checking
 					}
-#else // both ROARING as well as original CSet
+#else
 					add_equiv(wc);
 					if ((flags & MINRX_REG_ICASE) != 0) {
 						if (std::iswlower(wc))
