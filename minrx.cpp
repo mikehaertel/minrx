@@ -196,6 +196,19 @@ struct QSet {
 	~QSet() { ::operator delete(bits[0]); }
 	inline static std::uint64_t bit(UINT k) { return (std::uint64_t) 1 << (k & 0x3F); }
 	bool empty() const { return !bits[0][0]; }
+	bool contains(UINT k) const {
+		int i = 0, s = 6 * depth;
+		UINT j = 0;
+		while (i < depth) {
+			auto x = bits[i++][j];
+			s -= 6;
+			j = k >> s;
+			auto w = bit(j);
+			if (!(x & w))
+				return false;
+		}
+		return true;
+	}
 	bool insert(UINT k) {
 		bool r = false;
 		int i = 0, s = 6 * depth;
@@ -249,6 +262,7 @@ struct QVec {
 			storage[i].~DATA();
 		}
 	}
+	bool contains(UINT k) const { return qset.contains(k); }
 	bool empty() const { return qset.empty(); }
 	std::tuple<bool, DATA&> insert(UINT k, const DATA& v) {
 		bool r = qset.insert(k);
