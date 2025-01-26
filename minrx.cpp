@@ -754,7 +754,7 @@ struct Compile {
 			return {lhs, lhmaxstk, err};
 		if (wconv.look() == L'|') {
 			for (auto &l : lhs)
-				l.nstk += 2;
+				l.nstk += 1;
 			std::vector<Subexp> alts;
 			while (wconv.look() == L'|') {
 				wconv.nextchr();
