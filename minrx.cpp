@@ -36,6 +36,7 @@
 #include <cwctype>
 #include <algorithm>
 #include <deque>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -144,15 +145,19 @@ struct COWVec {
 		return *this;
 	}
 	~COWVec() { if (storage && --storage->refcnt == 0) storage->u.allocator->dealloc(storage); }
-	bool cmpgt(const COWVec &other, std::size_t limit) const {
-		std::size_t i = 0;
+	template <typename... XArgs>
+	bool cmpgt(const COWVec &other, std::size_t limit, XArgs... xargs) const {
+		std::size_t i;
 		TYPE *xv = &(*storage)[0];
 		TYPE *yv = &(*other.storage)[0];
-		while (i < limit && xv[i] == yv[i])
-			++i;
-		if (i == limit)
-			return false;
-		return xv[i] > yv[i];
+		for (i = 0; i < limit - sizeof... (XArgs); i++)
+			if (xv[i] != yv[i])
+				return xv[i] > yv[i];
+		if constexpr (sizeof...(XArgs) > 0)
+			for (TYPE x : { xargs... })
+				if (x != yv[i++])
+					return x > yv[i - 1];
+		return false;
 	}
 	const TYPE &get(std::size_t idx) const { return (*storage)[idx]; }
 	COWVec &put(std::size_t idx, TYPE val) {
@@ -263,10 +268,10 @@ struct QVec {
 	bool contains(UINT k) const { return qset.contains(k); }
 	bool empty() const { return qset.empty(); }
 	std::tuple<bool, DATA&> insert(UINT k, const DATA& v) {
-		bool r = qset.insert(k);
-		if (r)
-			new (storage + k) DATA(v);
-		return {r, storage[k]};
+		bool newly = qset.insert(k);
+		// WARNING: if newly inserted then we are returning a reference to uninitialized memory
+		// and it is the caller's responsibility to construct valid DATA there.
+		return {newly, storage[k]};
 	}
 	DATA &lookup(UINT k) { return storage[k]; }
 	const DATA &lookup(UINT k) const { return storage[k]; }
@@ -1123,8 +1128,9 @@ struct Execute {
 		Vec substack;
 		NState() {}
 		NState(Vec::Allocator &allocator): substack(allocator) {}
-		bool cmpgt(const NState &ns, std::size_t nstk) const {
-			return boff != ns.boff ? boff < ns.boff : substack.cmpgt(ns.substack, nstk);
+		template <typename... XArgs>
+		bool cmpgt(const NState &ns, std::size_t nstk, XArgs... xargs) const {
+			return boff != ns.boff ? boff < ns.boff : substack.cmpgt(ns.substack, nstk, xargs...);
 		}
 	};
 	const Regexp &r;
@@ -1137,18 +1143,36 @@ struct Execute {
 	QVec<NInt, NState> epsv { r.nodes.size() };
 	const Node *nodes = r.nodes.data();
 	Execute(const Regexp &r, minrx_regexec_flags_t flags, const char *bp, const char *ep) : r(r), flags(flags), wconv(r.enc, bp, ep) {}
-	void add(QVec<NInt, NState> &ncsv, NInt k, NInt nstk, const NState &ns, WChar wcnext) {
+	template <typename... XArgs>
+	void add(QVec<NInt, NState> &ncsv, NInt k, NInt nstk, const NState &ns, WChar wcnext, XArgs... xargs) {
 		const Node &n = nodes[k];
 		if (n.type <= Node::CSet) {
 			if (n.type == (NInt) wcnext || (n.type == Node::CSet && r.csets[n.args[0]].test(wcnext))) {
-				auto [newly, oldns] = ncsv.insert(k, ns);
-				if (!newly && ns.cmpgt(oldns, nstk))
-					oldns = ns;
+				auto [newly, newns] = ncsv.insert(k, ns);
+				if (newly)
+					new (&newns) NState(ns);
+				else if (ns.cmpgt(newns, nstk, xargs...))
+					newns = ns;
+				else
+					return;
+				if constexpr (sizeof... (XArgs) > 0) {
+					auto i = nstk - sizeof...(XArgs);
+					(newns.substack.put(i++, xargs), ...);
+				}
 			}
 		} else {
-			auto [newly, oldns] = epsv.insert(k, ns);
-			if (newly || (ns.cmpgt(oldns, nstk) && (oldns = ns, true)))
-				epsq.insert(k);
+			auto [newly, newns] = epsv.insert(k, ns);
+			if (newly)
+				new (&newns) NState(ns);
+			else if (ns.cmpgt(newns, nstk, xargs...))
+				newns = ns;
+			else
+				return;
+			if constexpr (sizeof... (XArgs) > 0) {
+				auto i = nstk - sizeof...(XArgs);
+				(newns.substack.put(i++, xargs), ...);
+			}
+			epsq.insert(k);
 		}
 	}
 	void epsclosure(QVec<NInt, NState> &ncsv, WChar wcnext) {
@@ -1177,20 +1201,15 @@ struct Execute {
 				}
 				break;
 			case Node::Fork:
-				if (auto pridelta = n.args[0]; pridelta != 1) { // e1|e2|...
-					NState nscopy = ns;
+				if (auto pridelta = n.args[0]; pridelta != 1) { // x|y|...
 					NInt priority = 0;
 					do {
-						nscopy.substack.put(nstk - 1, priority += pridelta);
-						add(ncsv, k + 1, nstk, nscopy, wcnext);
+						add(ncsv, k + 1, nstk, ns, wcnext, priority += pridelta);
 						k = k + 1 + nodes[k].args[1];
 					} while (nodes[k].type != Node::Join);
-				} else { // e1?
-					NState nscopy = ns;
-					nscopy.substack.put(nstk - 1, 0);
-					add(ncsv, k + 1, nstk, nscopy, wcnext);
-					nscopy.substack.put(nstk - 1, 1);
-					add(ncsv, k + 1 + n.args[1], nstk, nscopy, wcnext);
+				} else { // x?
+					add(ncsv, k + 1, nstk, ns, wcnext, (NInt) 0);
+					add(ncsv, k + 1 + n.args[1], nstk, ns, wcnext, (NInt) 1);
 				}
 				break;
 			case Node::Goto:
@@ -1200,28 +1219,14 @@ struct Execute {
 				add(ncsv, k + 1, nstk, ns, wcnext);
 				break;
 			case Node::Loop:
-				{
-					NState nscopy = ns;
-					nscopy.substack.put(nstk - 3, wconv.off());
-					nscopy.substack.put(nstk - 2, -1);
-					nscopy.substack.put(nstk - 1, wconv.off());
-					add(ncsv, k + 1, nstk, nscopy, wcnext);
-					if (n.args[1]) {
-						nscopy.substack.put(nstk - 2, 0);
-						add(ncsv, k + 1 + n.args[0], nstk, nscopy, wcnext);
-					}
-				}
+				add(ncsv, k + 1, nstk, ns, wcnext, (NInt) wconv.off(), (NInt) -1, (NInt) wconv.off());
+				if (n.args[1])
+					add(ncsv, k + 1 + n.args[0], nstk, ns, wcnext, (NInt) wconv.off(), (NInt) 0, (NInt) wconv.off());
 				break;
 			case Node::Next:
-				{
-					add(ncsv, k + 1, nstk, ns, wcnext);
-					if (n.args[1] && wconv.off() > ns.substack.get(nstk + 3 - 1)) {
-						NState nscopy = ns;
-						nscopy.substack.sub(nstk + 3 - 2, 1);
-						nscopy.substack.put(nstk + 3 - 1, wconv.off());
-						add(ncsv, k - n.args[0], nstk + 3, nscopy, wcnext);
-					}
-				}
+				add(ncsv, k + 1, nstk, ns, wcnext);
+				if (n.args[1] && wconv.off() > ns.substack.get(nstk + 3 - 1))
+					add(ncsv, k - n.args[0], nstk + 3, ns, wcnext, ns.substack.get(nstk), ns.substack.get(nstk + 1) - 1, (NInt) wconv.off());
 				break;
 			case Node::SubL:
 				{
