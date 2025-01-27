@@ -1192,15 +1192,13 @@ struct Compile {
 				case Node::Exit:
 					return {};
 				case Node::Fork:
-					{
-						int t = 0;
-						do {
-							add(k + 1);
-							k = k + 1 + nodes[k].args[1];
-							t++;
-						} while (nodes[k].type != Node::Join);
-						if (t == 1)
-							add(k);
+					if (n.args[0] != 1) { // x|y|...
+						do
+							add(k + 1), k = k + 1 + nodes[k].args[1];
+						while (nodes[k].type == Node::Goto);
+					} else {
+						add(k + 1);
+						add(k + 1 + nodes[k].args[1]);
 					}
 					break;
 				case Node::Goto:
