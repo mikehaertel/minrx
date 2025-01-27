@@ -682,9 +682,6 @@ struct CSet {
 	std::pair<std::optional<const std::array<bool, 256>>, std::optional<char>>
 	firstbytes(WConv::Encoding e) const {
 		std::array<bool, 256> fb = {};
-#ifdef ROARING
-		roaring_uint32_iterator_t *i;
-#endif
 		auto firstunique = [](const std::array<bool, 256> &fb) -> std::optional<char> {
 			int n = 0, u = -1;
 			for (int i = 0; i < 256; ++i)
@@ -694,16 +691,6 @@ struct CSet {
 		};
 		switch (e) {
 		case WConv::Encoding::Byte:
-#ifdef ROARING
-			i = roaring_iterator_create(bitmap);
-			while (i->has_value) {
-				if (i->current_value > 255)
-					break;
-				fb[i->current_value] = true;
-				roaring_uint32_iterator_advance(i);
-			}
-			roaring_uint32_iterator_free(i);
-#else
 			for (const auto &r : ranges) {
 				if (r.min > 255)
 					break;
@@ -711,23 +698,13 @@ struct CSet {
 				for (auto b = lo; b <= hi; b++)
 					fb[b] = true;
 			}
-#endif
 			return {fb, firstunique(fb)};
 		case WConv::Encoding::UTF8:
-#ifdef ROARING
-			i = roaring_iterator_create(bitmap);
-			while (i->has_value) {
-				fb[utfprefix(i->current_value)] = true;
-				roaring_uint32_iterator_advance(i);
-			}
-			roaring_uint32_iterator_free(i);
-#else
 			for (const auto &r : ranges) {
 				auto lo = utfprefix(r.min), hi = utfprefix(r.max);
 				for (auto b = lo; b <= hi; b++)
 					fb[b] = true;
 			}
-#endif
 			return {fb, firstunique(fb)};
 		default:
 			return {{}, {}};
