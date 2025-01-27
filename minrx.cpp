@@ -1190,7 +1190,7 @@ struct Execute {
 				}
 				break;
 			case Node::Goto:
-				add(ncsv, k + 1 + n.args[1], ns, wcnext);
+				add(ncsv, k + 1 + n.args[0], ns, wcnext);
 				break;
 			case Node::Join:
 				add(ncsv, k + 1, ns, wcnext);
