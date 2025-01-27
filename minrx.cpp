@@ -772,7 +772,7 @@ struct Compile {
 				rhmaxstk = std::max(mhmaxstk, rhmaxstk);
 				rhs.push_front({Node::Goto, {rhs.size(), mhs.size()}, nstk + 1});
 			}
-			lhs.push_front({Node::Fork, {(NInt) -1, lhs.size()}, nstk});
+			lhs.push_front({Node::Fork, {(NInt) -1, lhs.size()}, nstk + 1});
 			lhs.insert(lhs.end(), rhs.begin(), rhs.end());
 			lhmaxstk = std::max(lhmaxstk, rhmaxstk);
 			lhs.push_back({Node::Join, {lhs.size() - 1, 0}, nstk + 1});
@@ -799,14 +799,15 @@ struct Compile {
 		if (optional && !infinite) {
 			for (auto &l : lhs) l.nstk += 1;
 			auto lhsize = lhs.size();
-			lhs.push_front({Node::Fork, {(NInt) 1, lhsize}, nstk});
-			lhs.push_back({Node::Join, {lhsize, 0}, nstk + 1});
+			lhs.push_front({Node::Fork, {(NInt) 1, lhsize}, nstk + 1});
+			// NOTE: Restore the following if someday we need a reversible automaton.
+			// lhs.push_back({Node::Join, {lhsize, 0}, nstk + 1});
 			return {lhs, lhmaxstk + 1, MINRX_REG_SUCCESS};
 		} else {
 			for (auto &l : lhs) l.nstk += 3;
 			auto lhsize = lhs.size();
-			lhs.push_front({Node::Loop, {lhsize, (NInt) optional}, nstk});
-			lhs.push_back({Node::Next, {lhsize, (NInt) infinite}, nstk + 3});
+			lhs.push_front({Node::Loop, {lhsize, (NInt) optional}, nstk + 3});
+			lhs.push_back({Node::Next, {lhsize, (NInt) infinite}, nstk});
 			return {lhs, lhmaxstk + 3, MINRX_REG_SUCCESS};
 		}
 	}
@@ -834,8 +835,9 @@ struct Compile {
 			for (auto &r : rhs)
 				r.nstk += 1;
 			auto rhsize = rhs.size();
-			rhs.push_front({Node::Fork, {1, rhsize}, nstk});
-			rhs.push_back({Node::Join, {rhsize, 0}, nstk + 1});
+			rhs.push_front({Node::Fork, {1, rhsize}, nstk + 1});
+			// NOTE: Restore the following if someday we need a reversible automaton.
+			// rhs.push_back({Node::Join, {rhsize, 0}, nstk + 1});
 			for (; k < n; ++k)
 				lhs.insert(lhs.end(), rhs.begin(), rhs.end());
 		}
@@ -845,8 +847,8 @@ struct Compile {
 			for (auto &r : rhs)
 				r.nstk += 3;
 			auto rhsize = rhs.size();
-			rhs.push_front({Node::Loop, {rhsize, 0}, nstk});
-			rhs.push_back({Node::Next, {rhsize, 1}, nstk + 3});
+			rhs.push_front({Node::Loop, {rhsize, 0}, nstk + 3});
+			rhs.push_back({Node::Next, {rhsize, 1}, nstk});
 			lhs.insert(lhs.end(), rhs.begin(), rhs.end());
 		}
 		if (m == 0)
@@ -1084,8 +1086,8 @@ struct Compile {
 					return {lhs, lhmaxstk, err};
 				if (wconv.look() != L')')
 					return {{}, 0, MINRX_REG_EPAREN};
-				lhs.push_front({Node::SubL, {n, nsub}, nstk});
-				lhs.push_back({Node::SubR, {n, nsub}, nstk + 1});
+				lhs.push_front({Node::SubL, {n, nsub}, nstk + 1});
+				lhs.push_back({Node::SubR, {n, nsub}, nstk});
 				wconv.nextchr();
 			}
 			break;
@@ -1135,17 +1137,17 @@ struct Execute {
 	QVec<NInt, NState> epsv { r.nodes.size() };
 	const Node *nodes = r.nodes.data();
 	Execute(const Regexp &r, minrx_regexec_flags_t flags, const char *bp, const char *ep) : r(r), flags(flags), wconv(r.enc, bp, ep) {}
-	void add(QVec<NInt, NState> &ncsv, NInt k, const NState &ns, WChar wcnext) {
+	void add(QVec<NInt, NState> &ncsv, NInt k, NInt nstk, const NState &ns, WChar wcnext) {
 		const Node &n = nodes[k];
 		if (n.type <= Node::CSet) {
 			if (n.type == (NInt) wcnext || (n.type == Node::CSet && r.csets[n.args[0]].test(wcnext))) {
 				auto [newly, oldns] = ncsv.insert(k, ns);
-				if (!newly && ns.cmpgt(oldns, n.nstk))
+				if (!newly && ns.cmpgt(oldns, nstk))
 					oldns = ns;
 			}
 		} else {
 			auto [newly, oldns] = epsv.insert(k, ns);
-			if (newly || (ns.cmpgt(oldns, n.nstk) && (oldns = ns, true)))
+			if (newly || (ns.cmpgt(oldns, nstk) && (oldns = ns, true)))
 				epsq.insert(k);
 		}
 	}
@@ -1159,6 +1161,7 @@ struct Execute {
 			if (best.has_value() && ns.boff > best->get(r.nstk + 0))
 				continue;
 			const auto &n = nodes[k];
+			auto nstk = n.nstk;
 			switch (n.type) {
 			case Node::Exit:
 				{
@@ -1174,108 +1177,109 @@ struct Execute {
 				}
 				break;
 			case Node::Fork:
-				{
+				if (auto pridelta = n.args[0]; pridelta != 1) { // e1|e2|...
 					NState nscopy = ns;
-					NInt pridelta = n.args[0];
 					NInt priority = 0;
 					do {
-						nscopy.substack.put(n.nstk, priority += pridelta);
-						add(ncsv, k + 1, nscopy, wcnext);
+						nscopy.substack.put(nstk - 1, priority += pridelta);
+						add(ncsv, k + 1, nstk, nscopy, wcnext);
 						k = k + 1 + nodes[k].args[1];
 					} while (nodes[k].type != Node::Join);
-					if (priority == pridelta) {
-						nscopy.substack.put(n.nstk, priority += pridelta);
-						add(ncsv, k, nscopy, wcnext);
-					}
+				} else { // e1?
+					NState nscopy = ns;
+					nscopy.substack.put(nstk - 1, 0);
+					add(ncsv, k + 1, nstk, nscopy, wcnext);
+					nscopy.substack.put(nstk - 1, 1);
+					add(ncsv, k + 1 + n.args[1], nstk, nscopy, wcnext);
 				}
 				break;
 			case Node::Goto:
-				add(ncsv, k + 1 + n.args[0], ns, wcnext);
+				add(ncsv, k + 1 + n.args[0] + 1, nstk, ns, wcnext);
 				break;
 			case Node::Join:
-				add(ncsv, k + 1, ns, wcnext);
+				add(ncsv, k + 1, nstk, ns, wcnext);
 				break;
 			case Node::Loop:
 				{
 					NState nscopy = ns;
-					nscopy.substack.put(n.nstk, wconv.off());
-					nscopy.substack.put(n.nstk + 1, -1);
-					nscopy.substack.put(n.nstk + 2, wconv.off());
-					add(ncsv, k + 1, nscopy, wcnext);
+					nscopy.substack.put(nstk - 3, wconv.off());
+					nscopy.substack.put(nstk - 2, -1);
+					nscopy.substack.put(nstk - 1, wconv.off());
+					add(ncsv, k + 1, nstk, nscopy, wcnext);
 					if (n.args[1]) {
-						nscopy.substack.put(n.nstk + 1, 0);
-						add(ncsv, k + 1 + n.args[0], nscopy, wcnext);
+						nscopy.substack.put(nstk - 2, 0);
+						add(ncsv, k + 1 + n.args[0], nstk, nscopy, wcnext);
 					}
 				}
 				break;
 			case Node::Next:
 				{
-					add(ncsv, k + 1, ns, wcnext);
-					if (n.args[1] && wconv.off() > ns.substack.get(n.nstk - 1)) {
+					add(ncsv, k + 1, nstk, ns, wcnext);
+					if (n.args[1] && wconv.off() > ns.substack.get(nstk + 3 - 1)) {
 						NState nscopy = ns;
-						nscopy.substack.sub(n.nstk - 2, 1);
-						nscopy.substack.put(n.nstk - 1, wconv.off());
-						add(ncsv, k - n.args[0], nscopy, wcnext);
+						nscopy.substack.sub(nstk + 3 - 2, 1);
+						nscopy.substack.put(nstk + 3 - 1, wconv.off());
+						add(ncsv, k - n.args[0], nstk + 3, nscopy, wcnext);
 					}
 				}
 				break;
 			case Node::SubL:
 				{
 					NState nscopy = ns;
-					nscopy.substack.put(n.nstk, wconv.off());
+					nscopy.substack.put(nstk - 1, wconv.off());
 					if (n.args[0] != (NInt) -1)
 						for (auto i = n.args[0]; i <= n.args[1]; ++i) {
 							nscopy.substack.put(r.nstk + i * 2, -1);
 							nscopy.substack.put(r.nstk + i * 2 + 1, -1);
 						}
-					add(ncsv, k + 1, nscopy, wcnext);
+					add(ncsv, k + 1, nstk, nscopy, wcnext);
 				}
 				break;
 			case Node::SubR:
 				if (n.args[0] != (NInt) -1) {
 					NState nscopy = ns;
-					nscopy.substack.put(r.nstk + n.args[0] * 2 + 0, ns.substack.get(n.nstk - 1));
+					nscopy.substack.put(r.nstk + n.args[0] * 2 + 0, ns.substack.get(nstk));
 					nscopy.substack.put(r.nstk + n.args[0] * 2 + 1, wconv.off());
-					add(ncsv, k + 1, nscopy, wcnext);
+					add(ncsv, k + 1, nstk, nscopy, wcnext);
 				} else {
-					add(ncsv, k + 1, ns, wcnext);
+					add(ncsv, k + 1, nstk, ns, wcnext);
 				}
 				break;
 			case Node::ZBOB:
 				if (wconv.off() == 0 && (flags & MINRX_REG_NOTBOL) == 0)
-					add(ncsv, k + 1, ns, wcnext);
+					add(ncsv, k + 1, nstk, ns, wcnext);
 				break;
 			case Node::ZEOB:
 				if (wconv.look() == WConv::End && (flags & MINRX_REG_NOTEOL) == 0)
-					add(ncsv, k + 1, ns, wcnext);
+					add(ncsv, k + 1, nstk, ns, wcnext);
 				break;
 			case Node::ZBOL:
 				if (((wconv.off() == 0 && (flags & MINRX_REG_NOTBOL) == 0)) || wcprev == L'\n')
-					add(ncsv, k + 1, ns, wcnext);
+					add(ncsv, k + 1, nstk, ns, wcnext);
 				break;
 			case Node::ZEOL:
 				if (((wconv.look() == WConv::End && (flags & MINRX_REG_NOTEOL) == 0)) || wconv.look() == L'\n')
-					add(ncsv, k + 1, ns, wcnext);
+					add(ncsv, k + 1, nstk, ns, wcnext);
 				break;
 			case Node::ZBOW:
 				if ((wconv.off() == 0 || !is_word(wcprev)) && (wconv.look() != WConv::End && is_word(wconv.look())))
-					add(ncsv, k + 1, ns, wcnext);
+					add(ncsv, k + 1, nstk, ns, wcnext);
 				break;
 			case Node::ZEOW:
 				if ((wconv.off() != 0 && is_word(wcprev)) && (wconv.look() == WConv::End || !is_word(wconv.look())))
-					add(ncsv, k + 1, ns, wcnext);
+					add(ncsv, k + 1, nstk, ns, wcnext);
 				break;
 			case Node::ZXOW:
 				if (   ((wconv.off() == 0 || !is_word(wcprev)) && (wconv.look() != WConv::End && is_word(wconv.look())))
 				    || ((wconv.off() != 0 && is_word(wcprev)) && (wconv.look() == WConv::End || !is_word(wconv.look()))))
-					add(ncsv, k + 1, ns, wcnext);
+					add(ncsv, k + 1, nstk, ns, wcnext);
 				break;
 			case Node::ZNWB:
 				if (   (wconv.off() == 0 && wconv.look() == WConv::End)
 				    || (wconv.off() == 0 && wconv.look() != WConv::End && !is_word(wconv.look()))
 				    || (wconv.off() != 0 && !is_word(wcprev) && wconv.look() == WConv::End)
 				    || (wconv.off() != 0 && wconv.look() != WConv::End && is_word(wcprev) == is_word(wconv.look())))
-					add(ncsv, k + 1, ns, wcnext);
+					add(ncsv, k + 1, nstk, ns, wcnext);
 				break;
 			default:
 				abort();
@@ -1292,7 +1296,7 @@ struct Execute {
 		NState nsinit(allocator);
 		nsinit.boff = wconv.off();
 		auto wcnext = wconv.look();
-		add(mcsvs[0], 0, nsinit, wcnext);
+		add(mcsvs[0], 0, 0, nsinit, wcnext);
 		if (!epsq.empty())
 			epsclosure(mcsvs[0], wcnext);
 		for (;;) { // unrolled to ping-pong roles of mcsvs[0]/[1]
@@ -1302,11 +1306,11 @@ struct Execute {
 			wcprev = wcnext, wcnext = wconv.nextchr().look();
 			while (!mcsvs[0].empty()) {
 				auto [n, ns] = mcsvs[0].remove();
-				add(mcsvs[1], n + 1, ns, wcnext);
+				add(mcsvs[1], n + 1, nodes[n].nstk, ns, wcnext);
 			}
 			if (!best.has_value()) {
 				nsinit.boff = wconv.off();
-				add(mcsvs[1], 0, nsinit, wcnext);
+				add(mcsvs[1], 0, 0, nsinit, wcnext);
 			}
 			if (!epsq.empty())
 				epsclosure(mcsvs[1], wcnext);
@@ -1318,11 +1322,11 @@ struct Execute {
 			wcprev = wcnext, wcnext = wconv.nextchr().look();
 			while (!mcsvs[1].empty()) {
 				auto [n, ns] = mcsvs[1].remove();
-				add(mcsvs[0], n + 1, ns, wcnext);
+				add(mcsvs[0], n + 1, nodes[n].nstk, ns, wcnext);
 			}
 			if (!best.has_value()) {
 				nsinit.boff = wconv.off();
-				add(mcsvs[0], 0, nsinit, wcnext);
+				add(mcsvs[0], 0, 0, nsinit, wcnext);
 			}
 			if (!epsq.empty())
 				epsclosure(mcsvs[0], wcnext);
