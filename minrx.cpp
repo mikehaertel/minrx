@@ -51,6 +51,12 @@
 #endif
 #include "minrx.h"
 
+#ifdef __GNUC__
+#define INLINE __attribute__((__always_inline__)) inline
+#else
+#define INLINE inline
+#endif
+
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif /* HAVE_CONFIG_H */
@@ -1135,6 +1141,7 @@ struct Execute {
 	const Node *nodes = r.nodes.data();
 	Execute(const Regexp &r, minrx_regexec_flags_t flags, const char *bp, const char *ep) : r(r), flags(flags), wconv(r.enc, bp, ep) {}
 	template <typename... XArgs>
+	INLINE
 	void add(QVec<NInt, NState> &ncsv, NInt k, NInt nstk, const NState &ns, WChar wcnext, XArgs... xargs) {
 		const Node &n = nodes[k];
 		if (n.type <= Node::CSet) {
