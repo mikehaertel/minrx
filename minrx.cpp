@@ -1456,7 +1456,7 @@ struct Execute {
 				auto [n, ns] = mcsvs[0].remove();
 				add(mcsvs[1], n + 1, nodes[n].nstk, ns, wcnext);
 			}
-			if (!best.has_value() && (!r.firstcset.has_value() || r.firstcset->test(wcnext))) {
+			if (!best.has_value() && (!r.firstbytes.has_value() || (wcnext != WConv::End && (*r.firstbytes)[(unsigned char) *wconv.cp]))) {
 				nsinit.boff = wconv.off();
 				add(mcsvs[1], 0, 0, nsinit, wcnext);
 			}
@@ -1476,7 +1476,7 @@ struct Execute {
 				auto [n, ns] = mcsvs[1].remove();
 				add(mcsvs[0], n + 1, nodes[n].nstk, ns, wcnext);
 			}
-			if (!best.has_value() && (!r.firstcset.has_value() || r.firstcset->test(wcnext))) {
+			if (!best.has_value() && (!r.firstbytes.has_value() || (wcnext != WConv::End && (*r.firstbytes)[(unsigned char) *wconv.cp]))) {
 				nsinit.boff = wconv.off();
 				add(mcsvs[0], 0, 0, nsinit, wcnext);
 			}
