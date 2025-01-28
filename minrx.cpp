@@ -1,6 +1,6 @@
 //
 // MinRX: a minimal matcher for POSIX Extended Regular Expressions.
-// Copyright (C) 2023, 2024 Michael J. Haertel.
+// Copyright (C) 2023, 2024, 2025 Michael J. Haertel.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
