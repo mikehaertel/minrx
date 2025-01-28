@@ -66,9 +66,9 @@
 
 namespace MinRX {
 
-template <typename UINT> inline auto ctz(UINT x) { return __builtin_ctz(x); }
-template <> inline auto ctz(unsigned long x) { return __builtin_ctzl(x); }
-template <> inline auto ctz(unsigned long long x) { return __builtin_ctzll(x); }
+template <typename UINT> auto ctz(UINT x) { return __builtin_ctz(x); }
+template <> auto ctz(unsigned long x) { return __builtin_ctzl(x); }
+template <> auto ctz(unsigned long long x) { return __builtin_ctzll(x); }
 
 template <typename TYPE, TYPE INIT = 0>
 struct COWVec {
@@ -188,7 +188,7 @@ struct QSet {
 		bits[0][0] = 0;
 	}
 	~QSet() { ::operator delete(bits[0]); }
-	inline static std::uint64_t bit(UINT k) { return (std::uint64_t) 1 << (k & 0x3F); }
+	static std::uint64_t bit(UINT k) { return (std::uint64_t) 1 << (k & 0x3F); }
 	bool empty() const { return !bits[0][0]; }
 	bool contains(UINT k) const {
 		int i = 0, s = 6 * depth;
