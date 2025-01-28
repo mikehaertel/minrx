@@ -171,15 +171,6 @@ struct COWVec {
 		(*storage)[idx] = val;
 		return *this;
 	}
-	COWVec &sub(std::size_t idx, TYPE val) {
-		if (storage->refcnt > 1) {
-			--storage->refcnt;
-			storage = storage->clone();
-			storage->refcnt = 1;
-		}
-		(*storage)[idx] -= val;
-		return *this;
-	}
 };
 
 template <typename UINT>
