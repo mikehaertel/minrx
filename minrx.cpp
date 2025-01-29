@@ -1550,39 +1550,32 @@ struct Execute {
 			while (wcnext != WConv::End && (std::ptrdiff_t) off < rm[0].rm_eo)
 				wcprev = wcnext, off = wconv.off(), wcnext = wconv.nextchr();
 		NState nsinit(allocator);
-		if (r.firstcset.has_value() && !r.firstcset->test(wcnext)) {
+		if (r.firstbytes.has_value() && !r.firstcset->test(wcnext)) {
 		zoom:
-			if (r.firstbytes.has_value()) {
-				auto cp = wconv.cp, ep = wconv.ep;
-				if (r.firstunique.has_value()) {
-					cp = (const char *) std::memchr(cp, *r.firstunique, ep - cp);
-					if (cp == nullptr)
-						goto exit;
-				} else {
-					auto firstbytes = *r.firstbytes;
-					while (cp != ep && !firstbytes[(unsigned char) *cp])
-						++cp;
-					if (cp == ep)
-						goto exit;
-				}
-				if (cp != wconv.cp) {
-					if (r.enc == WConv::Encoding::UTF8) {
-						auto bp = cp;
-						while (bp != wconv.cp && cp - bp < 8 && (unsigned char) *--bp >= 0x80)
-							;
-						wconv.cp = (unsigned char) *bp >= 0x80 ? cp - 1 : bp;
-					} else {
-						wconv.cp = cp - 1;
-					}
-					++gen, wcprev = wconv.nextchr(), off = wconv.off(), wcnext = wconv.nextchr();
-				}
+			auto cp = wconv.cp, ep = wconv.ep;
+			if (r.firstunique.has_value()) {
+				cp = (const char *) std::memchr(cp, *r.firstunique, ep - cp);
+				if (cp == nullptr)
+					goto exit;
 			} else {
-				while (!r.firstcset->test(wcnext)) {
-					if (wcnext == WConv::End)
-						goto exit;
-					++gen, wcprev = wcnext, off = wconv.off(), wcnext = wconv.nextchr();
-				}
+				auto firstbytes = *r.firstbytes;
+				while (cp != ep && !firstbytes[(unsigned char) *cp])
+					++cp;
+				if (cp == ep)
+					goto exit;
 			}
+			if (cp != wconv.cp) {
+				if (r.enc == WConv::Encoding::UTF8) {
+					auto bp = cp;
+					while (bp != wconv.cp && cp - bp < 8 && (unsigned char) *--bp >= 0x80)
+						;
+					wconv.cp = (unsigned char) *bp >= 0x80 ? cp - 1 : bp;
+				} else {
+					wconv.cp = cp - 1;
+				}
+				wcnext = wconv.nextchr();
+			}
+			++gen, wcprev = wcnext, off = wconv.off(), wcnext = wconv.nextchr();
 		}
 		nsinit.boff = off;
 		if (minglobal)
@@ -1600,7 +1593,7 @@ struct Execute {
 				auto [n, ns] = mcsvs[0].remove();
 				add(mcsvs[1], n + 1, nodes[n].nstk, ns, wcnext);
 			}
-			if (!best.has_value() && (!r.firstcset.has_value() || r.firstcset->test(wcnext))) {
+			if (!best.has_value()) {
 				nsinit.boff = off;
 				add(mcsvs[1], 0, 0, nsinit, wcnext);
 			}
@@ -1609,7 +1602,7 @@ struct Execute {
 			if (mcsvs[1].empty()) {
 				if (best.has_value())
 					break;
-				if (r.firstcset.has_value())
+				if (r.firstbytes.has_value())
 					goto zoom;
 			}
 			if (wcnext == WConv::End)
@@ -1620,7 +1613,7 @@ struct Execute {
 				auto [n, ns] = mcsvs[1].remove();
 				add(mcsvs[0], n + 1, nodes[n].nstk, ns, wcnext);
 			}
-			if (!best.has_value() && (!r.firstcset.has_value() || r.firstcset->test(wcnext))) {
+			if (!best.has_value()) {
 				nsinit.boff = off;
 				add(mcsvs[0], 0, 0, nsinit, wcnext);
 			}
@@ -1629,7 +1622,7 @@ struct Execute {
 			if (mcsvs[0].empty()) {
 				if (best.has_value())
 					break;
-				if (r.firstcset.has_value())
+				if (r.firstbytes.has_value())
 					goto zoom;
 			}
 		}
