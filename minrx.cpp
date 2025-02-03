@@ -684,11 +684,12 @@ struct Node {
 		CSet = WCharMax + 1,	// args = index in Regexp::csets vector
 		// epsilon-matching node types
 		Exit,			// no args
-		Fork,			// args = priority delta, offset to next
-		Goto,			// args = offset to join, offset to next
-		Join,			// args = offset to fork
+		Fork,			// args = offset to first goto
+		Goto,			// args = offset to next goto, offset to just after join
+		Join,			// args = none (but supplies incoming stack depth for next node)
 		Loop,			// args = offset to next, optional flag
 		Next,			// args = offset to loop, infinite flag
+		Skip,			// args = offset over skipped nodes
 		SubL,			// args = minimum and maximum contained subexpression numbers
 		SubR,			// args = minimum and maximum contained subexpression numbers
 		ZBOB,			// no args - match empty string at beginning of buffer
@@ -765,16 +766,16 @@ struct Compile {
 			auto [rhs, rhmaxstk, err] = alts.back();
 			if (err)
 				return {rhs, rhmaxstk, err};
-			rhs.push_front({Node::Goto, {rhs.size(), rhs.size()}, nstk + 1});
+			rhs.push_front({Node::Goto, {rhs.size(), rhs.size() + 1}, nstk + 1});
 			alts.pop_back();
 			while (!alts.empty()) {
 				auto [mhs, mhmaxstk, _] = alts.back();
 				alts.pop_back();
 				rhs.insert(rhs.begin(), mhs.begin(), mhs.end());
 				rhmaxstk = std::max(mhmaxstk, rhmaxstk);
-				rhs.push_front({Node::Goto, {rhs.size(), mhs.size()}, nstk + 1});
+				rhs.push_front({Node::Goto, {mhs.size(), rhs.size() + 1}, nstk + 1});
 			}
-			lhs.push_front({Node::Fork, {(NInt) -1, lhs.size()}, nstk + 1});
+			lhs.push_front({Node::Fork, { lhs.size(), 0 }, nstk + 1});
 			lhs.insert(lhs.end(), rhs.begin(), rhs.end());
 			lhmaxstk = std::max(lhmaxstk, rhmaxstk);
 			lhs.push_back({Node::Join, {lhs.size() - 1, 0}, nstk + 1});
@@ -801,9 +802,7 @@ struct Compile {
 		if (optional && !infinite) {
 			for (auto &l : lhs) l.nstk += 1;
 			auto lhsize = lhs.size();
-			lhs.push_front({Node::Fork, {(NInt) 1, lhsize}, nstk + 1});
-			// NOTE: Restore the following if someday we need a reversible automaton.
-			// lhs.push_back({Node::Join, {lhsize, 0}, nstk + 1});
+			lhs.push_front({Node::Skip, {lhsize, 0}, nstk + 1});
 			return {lhs, lhmaxstk + 1, MINRX_REG_SUCCESS};
 		} else {
 			for (auto &l : lhs) l.nstk += 3;
@@ -837,9 +836,7 @@ struct Compile {
 			for (auto &r : rhs)
 				r.nstk += 1;
 			auto rhsize = rhs.size();
-			rhs.push_front({Node::Fork, {1, rhsize}, nstk + 1});
-			// NOTE: Restore the following if someday we need a reversible automaton.
-			// rhs.push_back({Node::Join, {rhsize, 0}, nstk + 1});
+			rhs.push_front({Node::Skip, {rhsize, 0}, nstk + 1});
 			for (; k < n; ++k)
 				lhs.insert(lhs.end(), rhs.begin(), rhs.end());
 		}
@@ -1199,19 +1196,16 @@ struct Execute {
 				}
 				break;
 			case Node::Fork:
-				if (auto pridelta = n.args[0]; pridelta != 1) { // x|y|...
-					NInt priority = 0;
+				{
+					NInt priority = (NInt) -1;
 					do {
-						add(ncsv, k + 1, nstk, ns, wcnext, priority += pridelta);
-						k = k + 1 + nodes[k].args[1];
+						add(ncsv, k + 1, nstk, ns, wcnext, priority--);
+						k = k + 1 + nodes[k].args[0];
 					} while (nodes[k].type != Node::Join);
-				} else { // x?
-					add(ncsv, k + 1, nstk, ns, wcnext, (NInt) 0);
-					add(ncsv, k + 1 + n.args[1], nstk, ns, wcnext, (NInt) 1);
 				}
 				break;
 			case Node::Goto:
-				add(ncsv, k + 1 + n.args[0] + 1, nstk, ns, wcnext);
+				add(ncsv, k + 1 + n.args[1], nstk, ns, wcnext);
 				break;
 			case Node::Join:
 				add(ncsv, k + 1, nstk, ns, wcnext);
@@ -1225,6 +1219,10 @@ struct Execute {
 				add(ncsv, k + 1, nstk, ns, wcnext);
 				if (n.args[1] && wconv.off() > ns.substack.get(nstk + 3 - 1))
 					add(ncsv, k - n.args[0], nstk + 3, ns, wcnext, ns.substack.get(nstk), ns.substack.get(nstk + 1) - 1, (NInt) wconv.off());
+				break;
+			case Node::Skip:
+				add(ncsv, k + 1, nstk, ns, wcnext, (NInt) 0);
+				add(ncsv, k + 1 + n.args[0], nstk, ns, wcnext, (NInt) 1);
 				break;
 			case Node::SubL:
 				{
