@@ -1118,17 +1118,23 @@ struct Compile {
 struct Execute {
 	typedef COWVec<std::size_t, (std::size_t) -1> Vec;
 	struct NState {
+		std::size_t gen = 0;
 		std::size_t boff;
 		Vec substack;
 		NState() {}
 		NState(Vec::Allocator &allocator): substack(allocator) {}
 		template <typename... XArgs>
-		bool cmpgt(const NState &ns, std::size_t nstk, XArgs... xargs) const {
-			return boff != ns.boff ? boff < ns.boff : substack.cmpgt(ns.substack, nstk, xargs...);
+		bool cmpgt(const NState &ns, std::size_t gen, std::size_t nstk, XArgs... xargs) const {
+			if (gen != ns.gen)
+				return gen > ns.gen;
+			if (boff != ns.boff)
+				return boff < ns.boff;
+			return substack.cmpgt(ns.substack, nstk, xargs...);
 		}
 	};
 	const Regexp &r;
 	const minrx_regexec_flags_t flags;
+	std::size_t gen = 0;
 	WConv wconv;
 	WChar wcprev = WConv::End;
 	Vec::Allocator allocator { r.nstk + 2 * r.nsub };
@@ -1146,10 +1152,11 @@ struct Execute {
 				auto [newly, newns] = ncsv.insert(k, ns);
 				if (newly)
 					new (&newns) NState(ns);
-				else if (ns.cmpgt(newns, nstk, xargs...))
+				else if (ns.cmpgt(newns, gen, nstk, xargs...))
 					newns = ns;
 				else
 					return;
+				newns.gen = gen;
 				if constexpr (sizeof... (XArgs) > 0) {
 					auto i = nstk - sizeof...(XArgs);
 					(newns.substack.put(i++, xargs), ...);
@@ -1159,10 +1166,11 @@ struct Execute {
 			auto [newly, newns] = epsv.insert(k, ns);
 			if (newly)
 				new (&newns) NState(ns);
-			else if (ns.cmpgt(newns, nstk, xargs...))
+			else if (ns.cmpgt(newns, gen, nstk, xargs...))
 				newns = ns;
 			else
 				return;
+			newns.gen = gen;
 			if constexpr (sizeof... (XArgs) > 0) {
 				auto i = nstk - sizeof...(XArgs);
 				(newns.substack.put(i++, xargs), ...);
@@ -1303,7 +1311,7 @@ struct Execute {
 		for (;;) { // unrolled to ping-pong roles of mcsvs[0]/[1]
 			if (wcnext == WConv::End)
 				break;
-			epsv.clear();
+			++gen;
 			wcprev = wcnext, wcnext = wconv.nextchr().look();
 			while (!mcsvs[0].empty()) {
 				auto [n, ns] = mcsvs[0].remove();
@@ -1319,7 +1327,7 @@ struct Execute {
 				break;
 			if (wcnext == WConv::End)
 				break;
-			epsv.clear();
+			++gen;
 			wcprev = wcnext, wcnext = wconv.nextchr().look();
 			while (!mcsvs[1].empty()) {
 				auto [n, ns] = mcsvs[1].remove();
