@@ -390,9 +390,20 @@ WConv &(WConv::*const WConv::nextfns[3])() = { &WConv::nextbyte, &WConv::nextmbt
 struct CSet {
 #ifdef CHARSET
 	charset_t *charset = nullptr;
+	bool isUTF8() {
+		auto loc = std::setlocale(LC_CTYPE, nullptr);
+		if (auto utf = std::strchr(loc ? loc : "", '.');
+			 utf != nullptr && (utf[1] == 'U' || utf[1] == 'u')
+					&& (utf[2] == 'T' || utf[2] == 't')
+					&& (utf[3] == 'F' || utf[3] == 'f')
+					&& (   (utf[4] == '8' && utf[5] == '\0')
+					    || (utf[4] == '-' && utf[5] == '8' && utf[6] == '\0')))
+			return true;
+		return false;
+	}
 	CSet() {
 		int errcode = 0;
-		charset = charset_create(& errcode);
+		charset = charset_create(& errcode, MB_CUR_MAX, isUTF8());
 		// FIXME: Throw error if charset == nullptr
 	}
 	CSet(const CSet &) = delete;
@@ -400,6 +411,10 @@ struct CSet {
 	CSet(CSet &&cs): charset(cs.charset) { cs.charset = nullptr; }
 	CSet &operator=(CSet &&cs) { charset = cs.charset; cs.charset = nullptr; return *this; }
 	~CSet() { if (charset) { charset_free(charset); charset = nullptr; } }
+	CSet &operator|=(const CSet &cs) {
+		charset_merge(charset, cs.charset);
+		return *this;
+	}
 #else
 	static std::map<std::string, CSet> cclmemo;
 	static std::mutex cclmutex;
@@ -419,7 +434,10 @@ struct CSet {
 #endif
 	CSet &invert() {
 #ifdef CHARSET
-		charset_invert(charset); // FIXME: no error checking
+		int errcode = 0;
+		charset_t *newset = charset_invert(charset, &errcode); // FIXME: no error checking
+		charset_free(charset);
+		charset = newset;
 #else
 		std::set<Range> nranges;
 		WChar lo = 0;
@@ -692,6 +710,14 @@ struct CSet {
 		};
 		switch (e) {
 		case WConv::Encoding::Byte:
+#ifdef CHARSET
+		{
+			int errcode = 0;
+			charset_firstbytes_t bytes = charset_firstbytes(charset, &errcode);
+			for (int i = 0; i < MAX_FIRSTBYTES; i++)
+				fb[i] = bytes.bytes[i];
+		}
+#else
 			for (const auto &r : ranges) {
 				if (r.min > 255)
 					break;
@@ -699,13 +725,23 @@ struct CSet {
 				for (auto b = lo; b <= hi; b++)
 					fb[b] = true;
 			}
+#endif
 			return {fb, firstunique(fb)};
 		case WConv::Encoding::UTF8:
+#ifdef CHARSET
+		{
+			int errcode = 0;
+			charset_firstbytes_t bytes = charset_firstbytes(charset, &errcode);
+			for (int i = 0; i < MAX_FIRSTBYTES; i++)
+				fb[i] = bytes.bytes[i];
+		}
+#else
 			for (const auto &r : ranges) {
 				auto lo = utfprefix(r.min), hi = utfprefix(r.max);
 				for (auto b = lo; b <= hi; b++)
 					fb[b] = true;
 			}
+#endif
 			return {fb, firstunique(fb)};
 		default:
 			return {{}, {}};
