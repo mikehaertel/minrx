@@ -390,20 +390,9 @@ WConv &(WConv::*const WConv::nextfns[3])() = { &WConv::nextbyte, &WConv::nextmbt
 struct CSet {
 #ifdef CHARSET
 	charset_t *charset = nullptr;
-	bool isUTF8() {
-		auto loc = std::setlocale(LC_CTYPE, nullptr);
-		if (auto utf = std::strchr(loc ? loc : "", '.');
-			 utf != nullptr && (utf[1] == 'U' || utf[1] == 'u')
-					&& (utf[2] == 'T' || utf[2] == 't')
-					&& (utf[3] == 'F' || utf[3] == 'f')
-					&& (   (utf[4] == '8' && utf[5] == '\0')
-					    || (utf[4] == '-' && utf[5] == '8' && utf[6] == '\0')))
-			return true;
-		return false;
-	}
-	CSet() {
+	CSet(WConv::Encoding enc) {
 		int errcode = 0;
-		charset = charset_create(& errcode, MB_CUR_MAX, isUTF8());
+		charset = charset_create(& errcode, MB_CUR_MAX, enc == WConv::Encoding::UTF8);
 		// FIXME: Throw error if charset == nullptr
 	}
 	CSet(const CSet &) = delete;
@@ -431,6 +420,7 @@ struct CSet {
 			set(e.min, e.max);
 		return *this;
 	}
+	CSet(WConv::Encoding enc) { }
 #endif
 	CSet &invert() {
 #ifdef CHARSET
@@ -1026,7 +1016,7 @@ struct Compile {
 					auto key = std::min(wc, std::min(wcl, wcu));
 					if (icmap.find(key) == icmap.end()) {
 						icmap.emplace(key, csets.size());
-						csets.emplace_back();
+						csets.emplace_back(enc);
 						csets.back().set(wc);
 						csets.back().set(wcl);
 						csets.back().set(wcu);
@@ -1051,13 +1041,13 @@ struct Compile {
 		case L'[':
 			lhmaxstk = nstk;
 			lhs.push_back({Node::CSet, {csets.size(), 0}, nstk});
-			if (auto err = csets.emplace_back().parse(flags, enc, wconv))
+			if (auto err = csets.emplace_back(enc).parse(flags, enc, wconv))
 				return {{}, 0, err};
 			break;
 		case L'.':
 			if (!dot.has_value()) {
 				dot = csets.size();
-				csets.emplace_back();
+				csets.emplace_back(enc);
 				if ((flags & MINRX_REG_NEWLINE) != 0)
 					csets.back().set(L'\n');
 				csets.back().invert();
@@ -1116,7 +1106,7 @@ struct Compile {
 				if (!esc_s.has_value()) {
 					esc_s = csets.size();
 					WConv wc(enc, "[[:space:]]");
-					csets.emplace_back().parse(flags, enc, wc.nextchr());
+					csets.emplace_back(enc).parse(flags, enc, wc.nextchr());
 				}
 				lhs.push_back({Node::CSet, {*esc_s, 0}, nstk});
 				break;
@@ -1126,7 +1116,7 @@ struct Compile {
 				if (!esc_S.has_value()) {
 					esc_S = csets.size();
 					WConv wc(enc, "[^[:space:]]");
-					csets.emplace_back().parse(flags, enc, wc.nextchr());
+					csets.emplace_back(enc).parse(flags, enc, wc.nextchr());
 				}
 				lhs.push_back({Node::CSet, {*esc_S, 0}, nstk});
 				break;
@@ -1136,7 +1126,7 @@ struct Compile {
 				if (!esc_w.has_value()) {
 					esc_w = csets.size();
 					WConv wc(enc, "[[:alnum:]_]");
-					csets.emplace_back().parse(flags, enc, wc.nextchr());
+					csets.emplace_back(enc).parse(flags, enc, wc.nextchr());
 				}
 				lhs.push_back({Node::CSet, {*esc_w, 0}, nstk});
 				break;
@@ -1146,7 +1136,7 @@ struct Compile {
 				if (!esc_W.has_value()) {
 					esc_W = csets.size();
 					WConv wc(enc, "[^[:alnum:]_]");
-					csets.emplace_back().parse(flags, enc, wc.nextchr());
+					csets.emplace_back(enc).parse(flags, enc, wc.nextchr());
 				}
 				lhs.push_back({Node::CSet, {*esc_W, 0}, nstk});
 				break;
@@ -1221,7 +1211,7 @@ struct Compile {
 					break;
 				}
 		} while (!epsq.empty());
-		CSet cs;
+		CSet cs(enc);
 		while (!firsts.empty()) {
 			auto k = firsts.remove();
 			auto t = nodes[k].type;
