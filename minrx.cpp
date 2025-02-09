@@ -691,6 +691,14 @@ struct CSet {
 		};
 		switch (e) {
 		case WConv::Encoding::Byte:
+#ifdef CHARSET
+		{
+			int errcode = 0;
+			charset_firstbytes_t bytes = charset_firstbytes(charset, &errcode);
+			for (int i = 0; i < MAX_FIRSTBYTES; i++)
+				fb[i] = bytes.bytes[i];
+		}
+#else
 			for (const auto &r : ranges) {
 				if (r.min > 255)
 					break;
@@ -698,13 +706,23 @@ struct CSet {
 				for (auto b = lo; b <= hi; b++)
 					fb[b] = true;
 			}
+#endif
 			return {fb, firstunique(fb)};
 		case WConv::Encoding::UTF8:
+#ifdef CHARSET
+		{
+			int errcode = 0;
+			charset_firstbytes_t bytes = charset_firstbytes(charset, &errcode);
+			for (int i = 0; i < MAX_FIRSTBYTES; i++)
+				fb[i] = bytes.bytes[i];
+		}
+#else
 			for (const auto &r : ranges) {
 				auto lo = utfprefix(r.min), hi = utfprefix(r.max);
 				for (auto b = lo; b <= hi; b++)
 					fb[b] = true;
 			}
+#endif
 			return {fb, firstunique(fb)};
 		default:
 			return {{}, {}};
