@@ -389,15 +389,19 @@ WConv &(WConv::*const WConv::nextfns[3])() = { &WConv::nextbyte, &WConv::nextmbt
 struct CSet {
 #ifdef CHARSET
 	charset_t *charset = nullptr;
-	CSet() {
+	CSet(WConv::Encoding enc) {
 		int errcode = 0;
-		charset = charset_create(& errcode);
+		charset = charset_create(& errcode, MB_CUR_MAX, enc == WConv::Encoding::UTF8);
 		// FIXME: Throw error if charset == nullptr
 	}
 	CSet(const CSet &) = delete;
 	CSet &operator=(const CSet &) = delete;
 	CSet(CSet &&cs): charset(cs.charset) { cs.charset = nullptr; }
 	CSet &operator=(CSet &&cs) { charset = cs.charset; cs.charset = nullptr; return *this; }
+	CSet &operator|=(const CSet &cs) {
+		charset_merge(charset, cs.charset);
+		return *this;
+	}
 	~CSet() { if (charset) { charset_free(charset); charset = nullptr; } }
 #else
 	static std::map<std::string, CSet> cclmemo;
@@ -410,6 +414,7 @@ struct CSet {
 		}
 	};
 	std::set<Range> ranges;
+	CSet(WConv::Encoding) { }
 	CSet &operator|=(const CSet &cs) {
 		for (const auto &e : cs.ranges)
 			set(e.min, e.max);
@@ -418,7 +423,10 @@ struct CSet {
 #endif
 	CSet &invert() {
 #ifdef CHARSET
-		charset_invert(charset); // FIXME: no error checking
+		int errcode = 0;
+		charset_t *newset = charset_invert(charset, &errcode); // FIXME: no error checking
+		charset_free(charset);
+		charset = newset;
 #else
 		std::set<Range> nranges;
 		WChar lo = 0;
@@ -944,7 +952,7 @@ struct Compile {
 					auto key = std::min(wc, std::min(wcl, wcu));
 					if (icmap.find(key) == icmap.end()) {
 						icmap.emplace(key, csets.size());
-						csets.emplace_back();
+						csets.emplace_back(enc);
 						csets.back().set(wc);
 						csets.back().set(wcl);
 						csets.back().set(wcu);
@@ -969,13 +977,13 @@ struct Compile {
 		case L'[':
 			lhmaxstk = nstk;
 			lhs.push_back({Node::CSet, {csets.size(), 0}, nstk});
-			if (auto err = csets.emplace_back().parse(flags, enc, wconv))
+			if (auto err = csets.emplace_back(enc).parse(flags, enc, wconv))
 				return {{}, 0, err};
 			break;
 		case L'.':
 			if (!dot.has_value()) {
 				dot = csets.size();
-				csets.emplace_back();
+				csets.emplace_back(enc);
 				if ((flags & MINRX_REG_NEWLINE) != 0)
 					csets.back().set(L'\n');
 				csets.back().invert();
@@ -1034,7 +1042,7 @@ struct Compile {
 				if (!esc_s.has_value()) {
 					esc_s = csets.size();
 					WConv wc(enc, "[[:space:]]");
-					csets.emplace_back().parse(flags, enc, wc.nextchr());
+					csets.emplace_back(enc).parse(flags, enc, wc.nextchr());
 				}
 				lhs.push_back({Node::CSet, {*esc_s, 0}, nstk});
 				break;
@@ -1044,7 +1052,7 @@ struct Compile {
 				if (!esc_S.has_value()) {
 					esc_S = csets.size();
 					WConv wc(enc, "[^[:space:]]");
-					csets.emplace_back().parse(flags, enc, wc.nextchr());
+					csets.emplace_back(enc).parse(flags, enc, wc.nextchr());
 				}
 				lhs.push_back({Node::CSet, {*esc_S, 0}, nstk});
 				break;
@@ -1054,7 +1062,7 @@ struct Compile {
 				if (!esc_w.has_value()) {
 					esc_w = csets.size();
 					WConv wc(enc, "[[:alnum:]_]");
-					csets.emplace_back().parse(flags, enc, wc.nextchr());
+					csets.emplace_back(enc).parse(flags, enc, wc.nextchr());
 				}
 				lhs.push_back({Node::CSet, {*esc_w, 0}, nstk});
 				break;
@@ -1064,7 +1072,7 @@ struct Compile {
 				if (!esc_W.has_value()) {
 					esc_W = csets.size();
 					WConv wc(enc, "[^[:alnum:]_]");
-					csets.emplace_back().parse(flags, enc, wc.nextchr());
+					csets.emplace_back(enc).parse(flags, enc, wc.nextchr());
 				}
 				lhs.push_back({Node::CSet, {*esc_W, 0}, nstk});
 				break;
