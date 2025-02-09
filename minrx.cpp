@@ -420,7 +420,7 @@ struct CSet {
 			set(e.min, e.max);
 		return *this;
 	}
-	CSet(WConv::Encoding enc) { }
+	CSet(WConv::Encoding) { }
 #endif
 	CSet &invert() {
 #ifdef CHARSET
