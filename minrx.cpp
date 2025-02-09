@@ -280,19 +280,17 @@ struct QVec {
 
 typedef int32_t WChar;			// because wchar_t may not be 32 bits
 constexpr int32_t WCharMax = 0x10FFFF;	// maximum code point: valid for Unicode and (FIXME!) blithely assumed for non-Unicode
-class WConv {
+class WConv final {
 public:
 	enum { End = -1 };
 	enum class Encoding { Byte, MBtoWC, UTF8 };
 private:
-	WConv &(WConv::*const nextfn)();
+	WChar (WConv::*const nextfn)();
 	const char *const bp;
 	const char *const ep;
 	const char *cp;
 	std::mbstate_t mbs;
-	WChar wch = End;
-	int len = 0;
-	static WConv &(WConv::*const nextfns[])();
+	static WChar (WConv::*const nextfns[])();
 public:
 	WConv(const WConv &) = default;
 	WConv(Encoding e, const char *bp, const char *ep)
@@ -300,45 +298,32 @@ public:
 		std::memset(&mbs, 0, sizeof mbs);
 	}
 	WConv(Encoding e, const char *bp): WConv(e, bp, bp + std::strlen(bp)) { }
-	auto look() const { return wch; }
-	auto lookahead() const { return WConv(*this).nextchr().look(); }
-	WConv &nextchr() { return (this->*nextfn)(); }
-	WConv &nextbyte() {
-		if ((cp += len) != ep)
-			len = 1, wch = (unsigned char) *cp;
-		else
-			len = 0, wch = End;
-		return *this;
-	}
-	WConv &nextmbtowc() {
+	auto lookahead() const { return WConv(*this).nextchr(); }
+	WChar nextchr() { return (this->*nextfn)(); }
+	WChar nextbyte() { return cp != ep ? (unsigned char) *cp++ : End; }
+	WChar nextmbtowc() {
 		wchar_t wct = L'\0';
-		if ((cp += len) != ep) {
+		if (cp != ep) {
 			auto n = mbrtowc(&wct, cp, ep - cp, &mbs);
 			if (n == 0 || n == (std::size_t) -1 || n == (std::size_t) -2) {
-				len = 1;
 				if (wct == L'\0')
-					wct = std::numeric_limits<WChar>::min() + (unsigned char) *cp;
+					wct = std::numeric_limits<WChar>::min() + (unsigned char) *cp++;
 			} else {
-				len = n;
+				cp += n;
 			}
-			wch = wct;
+			return wct;
 		} else {
-			len = 0, wch = End;
+			return End;
 		}
-		return *this;
 	}
-	WConv &nextutf8() {
-		if ((cp += len) != ep) {
+	WChar nextutf8() {
+		if (cp != ep) {
 			WChar u = (unsigned char) cp[0];
-			if (u < 0x80) {
-				len = 1, wch = u;
-				return *this;
-			}
-			if ((u & 0x40) == 0 || cp + 1 == ep) {
+			if (u < 0x80)
+				return cp += 1, u;
+			if ((u & 0x40) == 0 || cp + 1 == ep)
 			error:
-				len = 1, wch = std::numeric_limits<WChar>::min() + u;
-				return *this;
-			}
+				return cp += 1, std::numeric_limits<WChar>::min() + u;
 			WChar v = (unsigned char) cp[1];
 			if ((v & 0xC0) != 0x80)
 				goto error;
@@ -346,8 +331,7 @@ public:
 				WChar r = ((u & 0x1F) << 6) | (v & 0x3F);
 				if (r < 0x80)
 					goto error;
-				len = 2, wch = r;
-				return *this;
+				return cp += 2, r;
 			}
 			if (cp + 2 == ep)
 				goto error;
@@ -358,8 +342,7 @@ public:
 				WChar r = ((u & 0x0F) << 12) | ((v & 0x3F) << 6) | (w & 0x3F);
 				if (r < 0x800)
 					goto error;
-				len = 3, wch = r;
-				return *this;
+				return cp += 3, r;
 			}
 			if (cp + 3 == ep)
 				goto error;
@@ -371,20 +354,18 @@ public:
 			WChar r = ((u & 0x07) << 18) | ((v & 0x3F) << 12) | ((w & 0x3F) << 6) | (x & 0x3F);
 			if (r < 0x010000 || r > 0x10FFFF)
 				goto error;
-			len = 4, wch = r;
-			return *this;
+			return cp += 4, r;
 		} else {
-			len = 0, wch = End;
-			return *this;
+			return End;
 		}
 	}
 	std::size_t off() const { return cp - bp; }
 	auto ptr() const { return cp; }
-	auto save() { return std::make_tuple(cp, wch, len); }
-	void restore(std::tuple<const char *, WChar, int> t) { std::tie(cp, wch, len) = t; }
+	auto save() { return cp; }
+	void restore(const char *p) { cp = p; }
 };
 
-WConv &(WConv::*const WConv::nextfns[3])() = { &WConv::nextbyte, &WConv::nextmbtowc, &WConv::nextutf8 };
+WChar (WConv::*const WConv::nextfns[3])() = { &WConv::nextbyte, &WConv::nextmbtowc, &WConv::nextutf8 };
 
 struct CSet {
 #ifdef CHARSET
@@ -545,27 +526,25 @@ struct CSet {
 	}
 #endif
 	minrx_result_t parse(minrx_regcomp_flags_t flags, WConv::Encoding enc, WConv &wconv) {
-		auto wc = wconv.nextchr().look();
+		auto wc = wconv.nextchr();
 		bool inv = wc == L'^';
 		if (inv)
-			wc = wconv.nextchr().look();
-		for (bool first = true;; first = false) {
-			auto wclo = wc, wchi = wc;
-			if (wclo == WConv::End)
+			wc = wconv.nextchr();
+		for (bool first = true; first || wc != L']'; first = false) {
+			if (wc == WConv::End)
 				return MINRX_REG_EBRACK;
-			wc = wconv.nextchr().look();
-			if (wclo == L']' && !first)
-				break;
+			auto wclo = wc, wchi = wc;
+			wc = wconv.nextchr();
 			if (wclo == L'\\' && (flags & MINRX_REG_BRACK_ESCAPE) != 0) {
 				if (wc != WConv::End) {
 					wclo = wchi = wc;
-					wc = wconv.nextchr().look();
+					wc = wconv.nextchr();
 				} else {
 					return MINRX_REG_EESCAPE;
 				}
 			} else if (wclo == L'[') {
 				if (wc == L'.') {
-					wc = wconv.nextchr().look();
+					wc = wconv.nextchr();
 					wclo = wchi = wc;
 #ifdef CHARSET_NOT_YET
 					int32_t coll[2] = { wc, L'\0' };
@@ -578,27 +557,27 @@ struct CSet {
 						charset_add_collate(charset, coll);	// FIXME: No error checking
 					}
 #endif
-					wc = wconv.nextchr().look();
-					if (wc != L'.' || (wc = wconv.nextchr().look() != L']'))
+					wc = wconv.nextchr();
+					if (wc != L'.' || (wc = wconv.nextchr()) != L']')
 						return MINRX_REG_ECOLLATE;
+					wc = wconv.nextchr();
 				} else if (wc == L':') {
-					wconv.nextchr();
-					auto bp = wconv.ptr();
-					while (wconv.look() != WConv::End && wconv.look() != L':')
-						wconv.nextchr();
-					if (wconv.look() != L':')
+					auto bp = wconv.ptr(), ep = bp;
+					do
+						ep = wconv.ptr(), wc = wconv.nextchr();
+					while (wc != WConv::End && wc != L':');
+					if (wc != L':')
 						return MINRX_REG_ECTYPE;
-					auto ep = wconv.ptr();
-					wconv.nextchr();
-					if (wconv.look() != L']')
+					wc = wconv.nextchr();
+					if (wc != L']')
 						return MINRX_REG_ECTYPE;
-					wc = wconv.nextchr().look();
+					wc = wconv.nextchr();
 					auto cclname = std::string(bp, ep);
 					if (cclass(flags, enc, cclname))
 						continue;
 					return MINRX_REG_ECTYPE;
 				} else if (wc == L'=') {
-					wc = wconv.nextchr().look();
+					wc = wconv.nextchr();
 					wclo = wchi = wc;
 #ifdef CHARSET
 					charset_add_equiv(charset, wc);	// FIXME: No error checking
@@ -617,34 +596,34 @@ struct CSet {
 							add_equiv(std::towlower(wc));
 					}
 #endif
-					wc = wconv.nextchr().look();
-					if (wc != L'=' || (wc = wconv.nextchr().look() != L']'))
+					wc = wconv.nextchr();
+					if (wc != L'=' || (wc = wconv.nextchr()) != L']')
 						return MINRX_REG_ECOLLATE;
 				}
 			}
 			bool range = false;
 			if (wc == L'-') {
 				auto save = wconv.save();
-				wc = wconv.nextchr().look();
+				wc = wconv.nextchr();
 				if (wc == WConv::End)
 					return MINRX_REG_EBRACK;
 				if (wc != L']') {
 					wchi = wc;
-					wc = wconv.nextchr().look();
+					wc = wconv.nextchr();
 					if (wchi == L'\\' && (flags & MINRX_REG_BRACK_ESCAPE) != 0) {
 						if (wc != WConv::End) {
 							wchi = wc;
-							wc = wconv.nextchr().look();
+							wc = wconv.nextchr();
 						} else {
 							return MINRX_REG_EESCAPE;
 						}
 					} else if (wchi == L'[') {
 						if (wc == L'.') {
-							wchi = wconv.nextchr().look();
-							wc = wconv.nextchr().look();
-							if (wc != L'.' || (wc = wconv.nextchr().look()) != L']')
+							wchi = wconv.nextchr();
+							wc = wconv.nextchr();
+							if (wc != L'.' || (wc = wconv.nextchr()) != L']')
 								return MINRX_REG_ECOLLATE;
-							wc = wconv.nextchr().look();
+							wc = wconv.nextchr();
 						} else if (wc == L':' || wc == L'=') {
 							return MINRX_REG_ERANGE; // can't be range endpoint
 						}
@@ -727,6 +706,7 @@ struct Compile {
 	const minrx_regcomp_flags_t flags;
 	WConv::Encoding enc;
 	WConv wconv;
+	WChar wc;
 	std::vector<CSet> csets;
 	std::optional<std::size_t> dot;
 	std::optional<std::size_t> esc_s;
@@ -735,12 +715,11 @@ struct Compile {
 	std::optional<std::size_t> esc_W;
 	std::map<WChar, unsigned int> icmap;
 	NInt nsub = 0;
-	Compile(WConv::Encoding e, const char *bp, const char *ep, minrx_regcomp_flags_t flags): flags(flags), enc(e), wconv(e, bp, ep) { wconv.nextchr(); }
-	bool num(NInt &n) {
+	Compile(WConv::Encoding e, const char *bp, const char *ep, minrx_regcomp_flags_t flags): flags(flags), enc(e), wconv(e, bp, ep) { wc = wconv.nextchr(); }
+	bool num(NInt &n, WChar &wc) {
 		auto satmul = [](NInt x, NInt y) -> NInt {
 			return (x == 0 || y == 0) ? 0 : ((x * y / x == y) ? x * y : -1);
 		};
-		auto wc = wconv.look();
 		if (wc < L'0' || wc > L'9')
 			return false;
 		NInt v = 0;
@@ -748,12 +727,12 @@ struct Compile {
 			v = satmul(v, 10);
 			if (v == (NInt) -1 || (v += wc - L'0') < (NInt) wc - L'0') {
 				do
-					wc = wconv.nextchr().look();
+					wc = wconv.nextchr();
 				while (wc >= L'0' && wc <= L'9');
 				n = -1;
 				return true;
 			}
-			wc = wconv.nextchr().look();
+			wc = wconv.nextchr();
 		} while (wc >= L'0' && wc <= L'9');
 		n = v;
 		return true;
@@ -763,12 +742,12 @@ struct Compile {
 		auto [lhs, lhmaxstk, err] = cat(nested, nstk);
 		if (err)
 			return {lhs, lhmaxstk, err};
-		if (wconv.look() == L'|') {
+		if (wc == L'|') {
 			for (auto &l : lhs)
 				l.nstk += 1;
 			std::vector<Subexp> alts;
-			while (wconv.look() == L'|') {
-				wconv.nextchr();
+			while (wc == L'|') {
+				wc = wconv.nextchr();
 				alts.push_back(cat(nested, nstk + 1));
 			}
 			auto [rhs, rhmaxstk, err] = alts.back();
@@ -794,14 +773,12 @@ struct Compile {
 		auto [lhs, lhmaxstk, err] = rep(nested, nstk);
 		if (err)
 			return {lhs, lhmaxstk, err};
-		auto wc = wconv.look();
 		while (wc != WConv::End && wc != L'|' && (wc != L')' || !nested)) {
 			auto [rhs, rhmaxstk, err] = rep(nested, nstk);
 			if (err)
 				return {rhs, rhmaxstk, err};
 			lhs.insert(lhs.end(), rhs.begin(), rhs.end());
 			lhmaxstk = std::max(lhmaxstk, rhmaxstk);
-			wc = wconv.look();
 		}
 		return {lhs, lhmaxstk, MINRX_REG_SUCCESS};
 	}
@@ -869,19 +846,18 @@ struct Compile {
 			return lh;
 		bool optional = false, infinite = false;
 		for (;;) {
-			auto wc = wconv.look();
 			switch (wc) {
 			case L'?':
 				optional = true;
-				wconv.nextchr();
+				wc = wconv.nextchr();
 				continue;
 			case L'*':
 				optional = infinite = true;
-				wconv.nextchr();
+				wc = wconv.nextchr();
 				continue;
 			case L'+':
 				infinite = true;
-				wconv.nextchr();
+				wc = wconv.nextchr();
 				continue;
 			case L'{':
 				if ((flags & MINRX_REG_BRACE_COMPAT) == 0
@@ -892,37 +868,35 @@ struct Compile {
 						lh = mkrep(lh, optional, infinite, nstk);
 						optional = infinite = false;
 					}
-					wc = wconv.nextchr().look();
+					wc = wconv.nextchr();
 					if (wc == WConv::End)
 						return {{}, 0, MINRX_REG_EBRACE};
 					NInt m, n;
-					if (!num(m))
+					if (!num(m, wc))
 						return {{}, 0, MINRX_REG_BADBR};
-					wc = wconv.look();
 					if (wc == L'}') {
 						lh = mkrep(lh, m, m, nstk);
-						wconv.nextchr();
+						wc = wconv.nextchr();
 						continue;
 					}
 					if (wc == WConv::End)
 						return {{}, 0, MINRX_REG_EBRACE};
 					if (wc != L',')
 						return {{}, 0, MINRX_REG_BADBR};
-					wc = wconv.nextchr().look();
+					wc = wconv.nextchr();
 					if (wc == L'}') {
 						lh = mkrep(lh, m, -1, nstk);
-						wconv.nextchr();
+						wc = wconv.nextchr();
 						continue;
 					}
-					if (!num(n))
+					if (!num(n, wc))
 						return {{}, 0, MINRX_REG_BADBR};
-					wc = wconv.look();
 					if (wc == WConv::End)
 						return {{}, 0, MINRX_REG_EBRACE};
 					if (wc != L'}')
 						return {{}, 0, MINRX_REG_BADBR};
 					lh = mkrep(lh, m, n, nstk);
-					wconv.nextchr();
+					wc = wconv.nextchr();
 					continue;
 				}
 				// fall through
@@ -938,7 +912,6 @@ struct Compile {
 	Subexp chr(bool nested, NInt nstk) {
 		std::deque<Node> lhs;
 		std::size_t lhmaxstk;
-		auto wc = wconv.look();
 		switch (wc) {
 		default:
 		normal:
@@ -962,7 +935,7 @@ struct Compile {
 					lhs.push_back({(NInt) wc, {0, 0}, nstk});
 				}
 			}
-			wconv.nextchr();
+			wc = wconv.nextchr();
 			break;
 		case L'{':
 			if ((flags & MINRX_REG_BRACE_COMPAT) != 0
@@ -979,6 +952,7 @@ struct Compile {
 			lhs.push_back({Node::CSet, {csets.size(), 0}, nstk});
 			if (auto err = csets.emplace_back(enc).parse(flags, enc, wconv))
 				return {{}, 0, err};
+			wc = wconv.nextchr();
 			break;
 		case L'.':
 			if (!dot.has_value()) {
@@ -990,21 +964,21 @@ struct Compile {
 			}
 			lhmaxstk = nstk;
 			lhs.push_back({Node::CSet, {*dot, 0}, nstk});
-			wconv.nextchr();
+			wc = wconv.nextchr();
 			break;
 		case L'^':
 			lhmaxstk = nstk;
 			lhs.push_back({(flags & MINRX_REG_NEWLINE) == 0 ? Node::ZBOB : Node::ZBOL, {0, 0}, nstk});
-			wconv.nextchr();
+			wc = wconv.nextchr();
 			break;
 		case L'$':
 			lhmaxstk = nstk;
 			lhs.push_back({(flags & MINRX_REG_NEWLINE) == 0 ? Node::ZEOB : Node::ZEOL, {0, 0}, nstk});
-			wconv.nextchr();
+			wc = wconv.nextchr();
 			break;
 		case L'\\':
 			lhmaxstk = nstk;
-			wc = wconv.nextchr().look();
+			wc = wconv.nextchr();
 			switch (wc) {
 			case L'<':
 				if ((flags & MINRX_REG_EXTENSIONS_BSD) == 0)
@@ -1041,8 +1015,8 @@ struct Compile {
 					goto normal;
 				if (!esc_s.has_value()) {
 					esc_s = csets.size();
-					WConv wc(enc, "[[:space:]]");
-					csets.emplace_back(enc).parse(flags, enc, wc.nextchr());
+					WConv wc(enc, "[:space:]]");
+					csets.emplace_back(enc).parse(flags, enc, wc);
 				}
 				lhs.push_back({Node::CSet, {*esc_s, 0}, nstk});
 				break;
@@ -1051,8 +1025,8 @@ struct Compile {
 					goto normal;
 				if (!esc_S.has_value()) {
 					esc_S = csets.size();
-					WConv wc(enc, "[^[:space:]]");
-					csets.emplace_back(enc).parse(flags, enc, wc.nextchr());
+					WConv wc(enc, "^[:space:]]");
+					csets.emplace_back(enc).parse(flags, enc, wc);
 				}
 				lhs.push_back({Node::CSet, {*esc_S, 0}, nstk});
 				break;
@@ -1061,8 +1035,8 @@ struct Compile {
 					goto normal;
 				if (!esc_w.has_value()) {
 					esc_w = csets.size();
-					WConv wc(enc, "[[:alnum:]_]");
-					csets.emplace_back(enc).parse(flags, enc, wc.nextchr());
+					WConv wc(enc, "[:alnum:]_]");
+					csets.emplace_back(enc).parse(flags, enc, wc);
 				}
 				lhs.push_back({Node::CSet, {*esc_w, 0}, nstk});
 				break;
@@ -1071,8 +1045,8 @@ struct Compile {
 					goto normal;
 				if (!esc_W.has_value()) {
 					esc_W = csets.size();
-					WConv wc(enc, "[^[:alnum:]_]");
-					csets.emplace_back(enc).parse(flags, enc, wc.nextchr());
+					WConv wc(enc, "^[:alnum:]_]");
+					csets.emplace_back(enc).parse(flags, enc, wc);
 				}
 				lhs.push_back({Node::CSet, {*esc_W, 0}, nstk});
 				break;
@@ -1081,21 +1055,21 @@ struct Compile {
 			default:
 				goto normal;
 			}
-			wconv.nextchr();
+			wc = wconv.nextchr();
 			break;
 		case L'(':
 			{
 				NInt n = ++nsub;
-				wconv.nextchr();
+				wc = wconv.nextchr();
 				minrx_result_t err;
 				std::tie(lhs, lhmaxstk, err) = alt(true, nstk + 1);
 				if (err)
 					return {lhs, lhmaxstk, err};
-				if (wconv.look() != L')')
+				if (wc != L')')
 					return {{}, 0, MINRX_REG_EPAREN};
 				lhs.push_front({Node::SubL, {n, nsub}, nstk + 1});
 				lhs.push_back({Node::SubR, {n, nsub}, nstk});
-				wconv.nextchr();
+				wc = wconv.nextchr();
 			}
 			break;
 		case L')':
@@ -1143,6 +1117,7 @@ struct Execute {
 	const Regexp &r;
 	const minrx_regexec_flags_t flags;
 	std::size_t gen = 0;
+	std::size_t off = 0;
 	WConv wconv;
 	WChar wcprev = WConv::End;
 	Vec::Allocator allocator { r.nstk + 2 * r.nsub };
@@ -1200,7 +1175,7 @@ struct Execute {
 			switch (n.type) {
 			case Node::Exit:
 				{
-					auto b = ns.boff, e = wconv.off();
+					auto b = ns.boff, e = off;
 					if (!best.has_value()
 					    || b < best->get(r.nstk + 0)
 					    || (b == best->get(r.nstk + 0) && e >= best->get(r.nstk + 1)))
@@ -1227,14 +1202,14 @@ struct Execute {
 				add(ncsv, k + 1, nstk, ns, wcnext);
 				break;
 			case Node::Loop:
-				add(ncsv, k + 1, nstk, ns, wcnext, (NInt) wconv.off(), (NInt) -1, (NInt) wconv.off());
+				add(ncsv, k + 1, nstk, ns, wcnext, (NInt) off, (NInt) -1, (NInt) off);
 				if (n.args[1])
-					add(ncsv, k + 1 + n.args[0], nstk, ns, wcnext, (NInt) wconv.off(), (NInt) 0, (NInt) wconv.off());
+					add(ncsv, k + 1 + n.args[0], nstk, ns, wcnext, (NInt) off, (NInt) 0, (NInt) off);
 				break;
 			case Node::Next:
 				add(ncsv, k + 1, nstk, ns, wcnext);
-				if (n.args[1] && wconv.off() > ns.substack.get(nstk + 3 - 1))
-					add(ncsv, k - n.args[0], nstk + 3, ns, wcnext, ns.substack.get(nstk), ns.substack.get(nstk + 1) - 1, (NInt) wconv.off());
+				if (n.args[1] && off > ns.substack.get(nstk + 3 - 1))
+					add(ncsv, k - n.args[0], nstk + 3, ns, wcnext, ns.substack.get(nstk), ns.substack.get(nstk + 1) - 1, (NInt) off);
 				break;
 			case Node::Skip:
 				add(ncsv, k + 1, nstk, ns, wcnext, (NInt) 0);
@@ -1243,7 +1218,7 @@ struct Execute {
 			case Node::SubL:
 				{
 					NState nscopy = ns;
-					nscopy.substack.put(nstk - 1, wconv.off());
+					nscopy.substack.put(nstk - 1, off);
 					if (n.args[0] != (NInt) -1)
 						for (auto i = n.args[0]; i <= n.args[1]; ++i) {
 							nscopy.substack.put(r.nstk + i * 2, -1);
@@ -1256,46 +1231,46 @@ struct Execute {
 				if (n.args[0] != (NInt) -1) {
 					NState nscopy = ns;
 					nscopy.substack.put(r.nstk + n.args[0] * 2 + 0, ns.substack.get(nstk));
-					nscopy.substack.put(r.nstk + n.args[0] * 2 + 1, wconv.off());
+					nscopy.substack.put(r.nstk + n.args[0] * 2 + 1, off);
 					add(ncsv, k + 1, nstk, nscopy, wcnext);
 				} else {
 					add(ncsv, k + 1, nstk, ns, wcnext);
 				}
 				break;
 			case Node::ZBOB:
-				if (wconv.off() == 0 && (flags & MINRX_REG_NOTBOL) == 0)
+				if (off == 0 && (flags & MINRX_REG_NOTBOL) == 0)
 					add(ncsv, k + 1, nstk, ns, wcnext);
 				break;
 			case Node::ZEOB:
-				if (wconv.look() == WConv::End && (flags & MINRX_REG_NOTEOL) == 0)
+				if (wcnext == WConv::End && (flags & MINRX_REG_NOTEOL) == 0)
 					add(ncsv, k + 1, nstk, ns, wcnext);
 				break;
 			case Node::ZBOL:
-				if (((wconv.off() == 0 && (flags & MINRX_REG_NOTBOL) == 0)) || wcprev == L'\n')
+				if (((off == 0 && (flags & MINRX_REG_NOTBOL) == 0)) || wcprev == L'\n')
 					add(ncsv, k + 1, nstk, ns, wcnext);
 				break;
 			case Node::ZEOL:
-				if (((wconv.look() == WConv::End && (flags & MINRX_REG_NOTEOL) == 0)) || wconv.look() == L'\n')
+				if (((wcnext == WConv::End && (flags & MINRX_REG_NOTEOL) == 0)) || wcnext == L'\n')
 					add(ncsv, k + 1, nstk, ns, wcnext);
 				break;
 			case Node::ZBOW:
-				if ((wconv.off() == 0 || !is_word(wcprev)) && (wconv.look() != WConv::End && is_word(wconv.look())))
+				if ((off == 0 || !is_word(wcprev)) && (wcnext != WConv::End && is_word(wcnext)))
 					add(ncsv, k + 1, nstk, ns, wcnext);
 				break;
 			case Node::ZEOW:
-				if ((wconv.off() != 0 && is_word(wcprev)) && (wconv.look() == WConv::End || !is_word(wconv.look())))
+				if ((off != 0 && is_word(wcprev)) && (wcnext == WConv::End || !is_word(wcnext)))
 					add(ncsv, k + 1, nstk, ns, wcnext);
 				break;
 			case Node::ZXOW:
-				if (   ((wconv.off() == 0 || !is_word(wcprev)) && (wconv.look() != WConv::End && is_word(wconv.look())))
-				    || ((wconv.off() != 0 && is_word(wcprev)) && (wconv.look() == WConv::End || !is_word(wconv.look()))))
+				if (   ((off == 0 || !is_word(wcprev)) && (wcnext != WConv::End && is_word(wcnext)))
+				    || ((off != 0 && is_word(wcprev)) && (wcnext == WConv::End || !is_word(wcnext))))
 					add(ncsv, k + 1, nstk, ns, wcnext);
 				break;
 			case Node::ZNWB:
-				if (   (wconv.off() == 0 && wconv.look() == WConv::End)
-				    || (wconv.off() == 0 && wconv.look() != WConv::End && !is_word(wconv.look()))
-				    || (wconv.off() != 0 && !is_word(wcprev) && wconv.look() == WConv::End)
-				    || (wconv.off() != 0 && wconv.look() != WConv::End && is_word(wcprev) == is_word(wconv.look())))
+				if (   (off == 0 && wcnext == WConv::End)
+				    || (off == 0 && wcnext != WConv::End && !is_word(wcnext))
+				    || (off != 0 && !is_word(wcprev) && wcnext == WConv::End)
+				    || (off != 0 && wcnext != WConv::End && is_word(wcprev) == is_word(wcnext)))
 					add(ncsv, k + 1, nstk, ns, wcnext);
 				break;
 			default:
@@ -1306,13 +1281,13 @@ struct Execute {
 	}
 	int execute(std::size_t nm, minrx_regmatch_t *rm) {
 		QVec<NInt, NState> mcsvs[2] { r.nodes.size(), r.nodes.size() };
-		wconv.nextchr();
+		off = wconv.off();
+		auto wcnext = wconv.nextchr();
 		if ((flags & MINRX_REG_RESUME) != 0 && rm && rm[0].rm_eo > 0)
-			while (wconv.look() != WConv::End && (std::ptrdiff_t) wconv.off() < rm[0].rm_eo)
-				wcprev = wconv.look(), wconv.nextchr();
+			while (wcnext != WConv::End && (std::ptrdiff_t) off < rm[0].rm_eo)
+				wcprev = wcnext, off = wconv.off(), wcnext = wconv.nextchr();
 		NState nsinit(allocator);
-		nsinit.boff = wconv.off();
-		auto wcnext = wconv.look();
+		nsinit.boff = off;
 		add(mcsvs[0], 0, 0, nsinit, wcnext);
 		if (!epsq.empty())
 			epsclosure(mcsvs[0], wcnext);
@@ -1320,13 +1295,13 @@ struct Execute {
 			if (wcnext == WConv::End)
 				break;
 			++gen;
-			wcprev = wcnext, wcnext = wconv.nextchr().look();
+			wcprev = wcnext, off = wconv.off(), wcnext = wconv.nextchr();
 			while (!mcsvs[0].empty()) {
 				auto [n, ns] = mcsvs[0].remove();
 				add(mcsvs[1], n + 1, nodes[n].nstk, ns, wcnext);
 			}
 			if (!best.has_value()) {
-				nsinit.boff = wconv.off();
+				nsinit.boff = off;
 				add(mcsvs[1], 0, 0, nsinit, wcnext);
 			}
 			if (!epsq.empty())
@@ -1336,13 +1311,13 @@ struct Execute {
 			if (wcnext == WConv::End)
 				break;
 			++gen;
-			wcprev = wcnext, wcnext = wconv.nextchr().look();
+			wcprev = wcnext, off = wconv.off(), wcnext = wconv.nextchr();
 			while (!mcsvs[1].empty()) {
 				auto [n, ns] = mcsvs[1].remove();
 				add(mcsvs[0], n + 1, nodes[n].nstk, ns, wcnext);
 			}
 			if (!best.has_value()) {
-				nsinit.boff = wconv.off();
+				nsinit.boff = off;
 				add(mcsvs[0], 0, 0, nsinit, wcnext);
 			}
 			if (!epsq.empty())
