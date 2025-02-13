@@ -182,20 +182,23 @@ struct COWVec {
 template <typename UINT>
 struct QSet {
 	std::uint64_t *bits[10];
+	std::uint64_t bits0;
+	std::uint64_t *bitsfree = nullptr;
 	int depth = 0;
 	QSet(UINT limit) {
 		std::size_t s[10], t = 0;
 		do
 			t += (limit = s[depth++] = (limit + 63u) / 64u);
 		while (limit > 1);
-		std::uint64_t *next = (std::uint64_t *) ::operator new(t * sizeof (std::uint64_t));
-		for (int i = 0; i < depth; ++i)
+		std::uint64_t *next = bitsfree = (std::uint64_t *) ::operator new(t * sizeof (std::uint64_t));
+		bits[0] = &bits0;
+		for (int i = 1; i < depth; ++i)
 			bits[i] = next, next += s[depth - 1 - i];
-		bits[0][0] = 0;
+		bits0 = 0;
 	}
-	~QSet() { ::operator delete(bits[0]); }
+	~QSet() { if (bitsfree) ::operator delete(bitsfree); }
 	static std::uint64_t bit(UINT k) { return (std::uint64_t) 1 << (k & 0x3F); }
-	bool empty() const { return !bits[0][0]; }
+	bool empty() const { return !bits0; }
 	bool contains(UINT k) const {
 		int i = 0, s = 6 * depth;
 		UINT j = 0;
