@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2024,
+ * Copyright (C) 2024, 2025,
  * Arnold David Robbins
  *
  * Redistribution and use in source and binary forms, with or without
@@ -44,8 +44,8 @@
 
 #include "minrx.h"
 
-#define VERSION		"0.2"
-#define COPYRIGHT_YEAR	2024
+#define VERSION		"0.3"
+#define COPYRIGHT_YEAR	2025
 
 /* The name the program was invoked under, for error messages */
 const char *myname;
@@ -60,6 +60,7 @@ int print_num = false;
 int print_output = true;
 int wholelines = false;
 int word_match = false;
+int minimal_match = false;
 #define PRINT_HELP	1
 #define USE_LIBC_REGEX	2
 
@@ -163,6 +164,8 @@ set_syntax_flags(void)
 
 		if (ignorecase)
 			minrx_syntax_flags |= MINRX_REG_ICASE;	// Ignore case (duh)
+		if (minimal_match)
+			minrx_syntax_flags |= MINRX_REG_MINIMAL;
 	} else {
 		syntax_flags = REG_EXTENDED
 			| REG_NOSUB
@@ -285,11 +288,11 @@ parse_args(int argc, char **argv)
 	/*
 	 * The + on the front tells GNU getopt not to rearrange argv.
 	 */
-	const char *optlist = "+ce:f:ilnqsvxV";	// Add 'w' for word match
+	const char *optlist = "+ce:f:ilMnqsvxV";	// Add 'w' for word match
 	int c;
 	/*
 	 * Sorted by long option name!
-	 * Long options are the same as GNU grep's.
+	 * Where possible, long options are the same as GNU grep's.
 	 */
 	static const struct option optab[] = {
 		{ "count",		no_argument,		& do_count,	'c' },
@@ -301,6 +304,7 @@ parse_args(int argc, char **argv)
 		{ "libc-regex",		no_argument,		NULL,	USE_LIBC_REGEX },
 		{ "line-number",	no_argument,		&print_num,	'n' },
 		{ "line-regexp",	no_argument,		& wholelines,	'x' },
+		{ "minimal",		no_argument,		& minimal_match,'M' },
 		{ "no-messages",	no_argument,		NULL,		's' },
 		{ "quiet",		no_argument,		NULL,		'q' },
 		{ "regexp",		required_argument,	NULL,		'e' },
@@ -334,6 +338,9 @@ parse_args(int argc, char **argv)
 			break;
 		case 'l':
 			list_files = true;
+			break;
+		case 'M':
+			minimal_match = true;
 			break;
 		case 'n':
 			print_num = true;
@@ -388,6 +395,7 @@ usage(int exit_status)
 			"\t-f <file>, --file=<file>\tRead patterns from file\n"
 			"\t-i, --ignore-case\t\tIgnore case in regexp and input\n"
 			"\t-l, --files-with-matches\tList matching file names\n"
+			"\t-M, --minimal\t\t\tSupport POSIX ??, *?, etc. operators (MinRX only)\n"
 			"\t-n, --line-number\t\tPrint line numbers of matching lines\n"
 			"\t-q, --quiet, --silent\t\tDon't print lines, rely on exit status\n"
 			"\t-s, --no-messages\t\tDon't print error messages\n"
