@@ -395,11 +395,12 @@ minimal repetition.
 
 When multiple paths reach the same NState with different lengths for
 the minimal repetitions, MinRX favors the path with smaller count(s)
-and prunes the path with larger count(s).  This pruning is done at a
-lower priority than the NState pruning that selects the best
-POSIX-conforming leftmost-longest matches.  In this way, MinRX is
-constantly selecting in favor of solutions that minimize the minimal
-repetitions, without otherwise breaking POSIX conformance.
+and prunes the path with larger count(s).  The NState pruning to favor
+shorter paths for non-greedy repetitions has higher priority than NState
+pruning that occurs to select in favor of leftmost-longest matches.
+In this way, MinRX is constantly selecting in favor of solutions that
+minimize the non-greedy repetitions, without otherwise breaking POSIX
+conformance for cases that have no non-greedy repetitions.
 
 When an accepting state is found, MinRX memorizes the count vector for
 all minimal repetitions along the path that led to that state.  Then,
