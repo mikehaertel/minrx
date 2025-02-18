@@ -834,7 +834,7 @@ struct Compile {
 			for (auto &r : rhs)
 				r.nstk += 3;
 			auto rhsize = rhs.size();
-			rhs.push_front({Node::Loop, {rhsize, 0}, nstk + 3});
+			rhs.push_front({Node::Loop, {rhsize, 1}, nstk + 3});
 			rhs.push_back({Node::Next, {rhsize, 1}, nstk});
 			lhs.insert(lhs.end(), rhs.begin(), rhs.end());
 		}
