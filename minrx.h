@@ -40,20 +40,21 @@ extern "C" {
  */
 
 typedef enum {				/* Flags for minrx_reg*comp() */
-	MINRX_REG_EXTENDED = 1,		/* required in current version of MinRX */
-	MINRX_REG_ICASE = 2,		/* ignore case in pattern and search */
-	MINRX_REG_NEWLINE = 4,		/* exclude \n from . and [^...] and treat as boundary for ^ and $ */
-	MINRX_REG_NOSUB = 8,		/* yes/no result only; no regmatch_t substrings results */
-	MINRX_REG_BRACE_COMPAT = 16,	/* { begins interval expression only when followed by digit */
-	MINRX_REG_BRACK_ESCAPE = 32,	/* bracket expressions [...] allow backslash escapes */
-	MINRX_REG_EXTENSIONS_BSD = 64,	/* enable BSD extensions \< and \> */
-	MINRX_REG_EXTENSIONS_GNU = 128,	/* enable GNU extensions \b \B \s \S \w \W */
-	MINRX_REG_NATIVE1B = 256	/* use native encoding for 8-bit character sets (MB_CUR_LEN == 1) */
+	MINRX_REG_EXTENDED = 1,		/* POSIX option: use "extended" syntax (N.B. this flag is required in the current version of MinRX) */
+	MINRX_REG_ICASE = 2,		/* POSIX option: ignore case in pattern and search */
+	MINRX_REG_MINIMAL = 4,		/* POSIX option: swap meaning of ? and ??, * and *?, and + and +? operators */
+	MINRX_REG_NEWLINE = 8,		/* POSIX option: exclude \n from . and [^...] and treat as boundary for ^ and $ */
+	MINRX_REG_NOSUB = 16,		/* POSIX option: yes/no result only; no regmatch_t substrings results */
+	MINRX_REG_BRACE_COMPAT = 32,	/* MinRX extension: { begins interval expression only when followed by digit */
+	MINRX_REG_BRACK_ESCAPE = 64,	/* MinRX extension: bracket expressions [...] allow backslash escapes */
+	MINRX_REG_EXTENSIONS_BSD = 128,	/* MinRX extension: enable BSD extensions \< and \> */
+	MINRX_REG_EXTENSIONS_GNU = 256,	/* MinRX extension: enable GNU extensions \b \B \s \S \w \W */
+	MINRX_REG_NATIVE1B = 512	/* MinRX extension: use native encoding for 8-bit character sets (MB_CUR_LEN == 1) */
 } minrx_regcomp_flags_t;
 
 typedef enum {				/* Flags for minrx_reg*exec() */
-	MINRX_REG_NOTBOL = 1,		/* don't match ^ at beginning of string */
-	MINRX_REG_NOTEOL = 2,		/* don't match $ at end of string */
+	MINRX_REG_NOTBOL = 1,		/* POSIX option: don't match ^ at beginning of string */
+	MINRX_REG_NOTEOL = 2,		/* POSIX option: don't match $ at end of string */
 	MINRX_REG_RESUME = 4,		/* MinRX extension: resume search from rm[0].rm_eo */
 } minrx_regexec_flags_t;
 

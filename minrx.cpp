@@ -678,6 +678,8 @@ struct Node {
 		Goto,			// args = offset to next goto, offset to just after join
 		Join,			// args = none (but supplies incoming stack depth for next node)
 		Loop,			// args = offset to next, optional flag
+		MinL,			// args = minimized construct number
+		MinR,			// args = minimized construct number
 		Next,			// args = offset to loop, infinite flag
 		Skip,			// args = offset over skipped nodes
 		SubL,			// args = minimum and maximum contained subexpression numbers
@@ -699,6 +701,7 @@ struct Node {
 struct Regexp {
 	const std::vector<CSet> csets;
 	const std::vector<Node> nodes;
+	std::size_t nmin;
 	std::size_t nstk;
 	std::size_t nsub;
 	WConv::Encoding enc;
@@ -717,6 +720,7 @@ struct Compile {
 	std::optional<std::size_t> esc_w;
 	std::optional<std::size_t> esc_W;
 	std::map<WChar, unsigned int> icmap;
+	NInt nmin = 0;
 	NInt nsub = 0;
 	Compile(WConv::Encoding e, const char *bp, const char *ep, minrx_regcomp_flags_t flags): flags(flags), enc(e), wconv(e, bp, ep) { wc = wconv.nextchr(); }
 	bool num(NInt &n, WChar &wc) {
@@ -847,20 +851,23 @@ struct Compile {
 		auto lh = chr(nested, nstk);
 		if (std::get<minrx_result_t>(lh))
 			return lh;
-		bool optional = false, infinite = false;
+		bool optional = false, infinite = false, minimal = (flags & MINRX_REG_MINIMAL) != 0;
 		for (;;) {
 			switch (wc) {
 			case L'?':
 				optional = true;
-				wc = wconv.nextchr();
+				if ((wc = wconv.nextchr()) == L'?')
+					minimal ^= true, wc = wconv.nextchr();
 				continue;
 			case L'*':
 				optional = infinite = true;
-				wc = wconv.nextchr();
+				if ((wc = wconv.nextchr()) == L'?')
+					minimal ^= true, wc = wconv.nextchr();
 				continue;
 			case L'+':
 				infinite = true;
-				wc = wconv.nextchr();
+				if ((wc = wconv.nextchr()) == L'?')
+					minimal ^= true, wc = wconv.nextchr();
 				continue;
 			case L'{':
 				if ((flags & MINRX_REG_BRACE_COMPAT) == 0
@@ -904,6 +911,13 @@ struct Compile {
 				}
 				// fall through
 			default:
+				if (minimal) {
+					auto [nodes, maxstk, err] = lh;
+					for (auto &n : nodes) n.nstk += 1;
+					nodes.push_front({Node::MinL, {nmin, 0}, maxstk + 1});
+					nodes.push_back({Node::MinR, {nmin++, 0}, maxstk});
+					lh = std::make_tuple(nodes, maxstk + 1, err);
+				}
 				if (optional || infinite) {
 					lh = mkrep(lh, optional, infinite, nstk);
 					optional = infinite = false;
@@ -1091,12 +1105,14 @@ struct Compile {
 		if (err) {
 			csets.clear();
 			lhs.clear();
+			nmin = 0;
 			nstk = 0;
 			nsub = 0;
 		} else {
 			lhs.push_back({Node::Exit, {0, 0}, 0});
 		}
-		return new Regexp{ std::move(csets), {lhs.begin(), lhs.end()}, nstk, nsub + 1, enc, err };
+		for (auto &l : lhs) l.nstk += nmin;
+		return new Regexp{ std::move(csets), {lhs.begin(), lhs.end()}, nmin, nstk, nsub + 1, enc, err };
 	}
 };
 
@@ -1119,12 +1135,13 @@ struct Execute {
 	};
 	const Regexp &r;
 	const minrx_regexec_flags_t flags;
+	const std::size_t suboff = r.nmin + r.nstk;
 	std::size_t gen = 0;
 	std::size_t off = 0;
 	WConv wconv;
 	WChar wcprev = WConv::End;
-	Vec::Allocator allocator { r.nstk + 2 * r.nsub };
-	std::optional<COWVec<std::size_t, (std::size_t) -1>> best;
+	Vec::Allocator allocator { suboff + 2 * r.nsub };
+	std::optional<Vec> best;
 	QSet<NInt> epsq { r.nodes.size() };
 	QVec<NInt, NState> epsv { r.nodes.size() };
 	const Node *nodes = r.nodes.data();
@@ -1171,7 +1188,7 @@ struct Execute {
 		do {
 			NInt k = epsq.remove();
 			NState &ns = epsv.lookup(k);
-			if (best.has_value() && ns.boff > best->get(r.nstk + 0))
+			if (best.has_value() && ns.boff > best->get(suboff + 0))
 				continue;
 			const auto &n = nodes[k];
 			auto nstk = n.nstk;
@@ -1180,12 +1197,17 @@ struct Execute {
 				{
 					auto b = ns.boff, e = off;
 					if (!best.has_value()
-					    || b < best->get(r.nstk + 0)
-					    || (b == best->get(r.nstk + 0) && e >= best->get(r.nstk + 1)))
+					    || b < best->get(suboff + 0)
+					    || (b == best->get(suboff + 0) && e >= best->get(suboff + 1) && (r.nmin == 0 || [&]() {
+							for (std::size_t i = 0; i < r.nmin; ++i)
+								if (ns.substack.get(i) < best->get(i))
+									return false;
+							return true;
+						}())))
 					{
 						best = ns.substack;
-						best->put(r.nstk + 0, b);
-						best->put(r.nstk + 1, e);
+						best->put(suboff + 0, b);
+						best->put(suboff + 1, e);
 					}
 				}
 				break;
@@ -1209,6 +1231,22 @@ struct Execute {
 				if (n.args[1])
 					add(ncsv, k + 1 + n.args[0], nstk, ns, wcnext, (NInt) off, (NInt) 0, (NInt) off);
 				break;
+			case Node::MinL:
+				{
+					NState nscopy = ns;
+					nscopy.substack.put(nstk - 1, off);
+					add(ncsv, k + 1, nstk, nscopy, wcnext);
+				}
+				break;
+			case Node::MinR:
+				{
+					std::size_t oldlen = (std::size_t) -1 - ns.substack.get(n.args[0]);
+					std::size_t newlen = (std::size_t) -1 - (oldlen + (off - ns.substack.get(nstk)));
+					NState nscopy = ns;
+					nscopy.substack.put(n.args[0], newlen);
+					add(ncsv, k + 1, nstk, nscopy, wcnext);
+				}
+				break;
 			case Node::Next:
 				add(ncsv, k + 1, nstk, ns, wcnext);
 				if (n.args[1] && off > ns.substack.get(nstk + 3 - 1))
@@ -1224,8 +1262,8 @@ struct Execute {
 					nscopy.substack.put(nstk - 1, off);
 					if (n.args[0] != (NInt) -1)
 						for (auto i = n.args[0]; i <= n.args[1]; ++i) {
-							nscopy.substack.put(r.nstk + i * 2, -1);
-							nscopy.substack.put(r.nstk + i * 2 + 1, -1);
+							nscopy.substack.put(suboff + i * 2, -1);
+							nscopy.substack.put(suboff + i * 2 + 1, -1);
 						}
 					add(ncsv, k + 1, nstk, nscopy, wcnext);
 				}
@@ -1233,8 +1271,8 @@ struct Execute {
 			case Node::SubR:
 				if (n.args[0] != (NInt) -1) {
 					NState nscopy = ns;
-					nscopy.substack.put(r.nstk + n.args[0] * 2 + 0, ns.substack.get(nstk));
-					nscopy.substack.put(r.nstk + n.args[0] * 2 + 1, off);
+					nscopy.substack.put(suboff + n.args[0] * 2 + 0, ns.substack.get(nstk));
+					nscopy.substack.put(suboff + n.args[0] * 2 + 1, off);
 					add(ncsv, k + 1, nstk, nscopy, wcnext);
 				} else {
 					add(ncsv, k + 1, nstk, ns, wcnext);
@@ -1333,8 +1371,8 @@ struct Execute {
 				std::size_t nsub = std::min(nm, r.nsub);
 				std::size_t i;
 				for (i = 0; i < nsub; ++i) {
-					rm[i].rm_so = (*best->storage)[r.nstk + i * 2];
-					rm[i].rm_eo = (*best->storage)[r.nstk + i * 2 + 1];
+					rm[i].rm_so = (*best->storage)[suboff + i * 2];
+					rm[i].rm_eo = (*best->storage)[suboff + i * 2 + 1];
 				}
 				for (; i < nm; ++i)
 					rm[i].rm_so = rm[i].rm_eo = -1;
