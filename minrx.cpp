@@ -1205,7 +1205,7 @@ struct Execute {
 					    || b < best->get(suboff + 0)
 					    || (b == best->get(suboff + 0) && e >= best->get(suboff + 1) && (r.nmin == 0 || [&]() {
 							for (std::size_t i = 0; i < r.nmin; ++i)
-								if (ns.substack.get(i) < best->get(i))
+								if (best->get(i) != 0 && ns.substack.get(i) != 0 && ns.substack.get(i) < best->get(i))
 									return false;
 							return true;
 						}())))
@@ -1333,6 +1333,8 @@ struct Execute {
 			while (wcnext != WConv::End && (std::ptrdiff_t) off < rm[0].rm_eo)
 				wcprev = wcnext, off = wconv.off(), wcnext = wconv.nextchr();
 		NState nsinit(allocator);
+		for (std::size_t i = 0; i < r.nmin; ++i)
+			nsinit.substack.put(i, 0);
 		nsinit.boff = off;
 		add(mcsvs[0], 0, 0, nsinit, wcnext);
 		if (!epsq.empty())
