@@ -789,6 +789,13 @@ struct Compile {
 		}
 		return {lhs, lhmaxstk, MINRX_REG_SUCCESS};
 	}
+	Subexp minify(const Subexp &lh) {
+		auto [nodes, maxstk, err] = lh;
+		for (auto &n : nodes) n.nstk += 1;
+		nodes.push_front({Node::MinL, {nmin, 0}, maxstk + 1});
+		nodes.push_back({Node::MinR, {nmin++, 0}, maxstk});
+		return {nodes, maxstk + 1, err};
+	}
 	Subexp mkrep(const Subexp &lh, bool optional, bool infinite, NInt nstk) {
 		auto [lhs, lhmaxstk, _] = lh;
 		if (optional && !infinite) {
@@ -905,19 +912,17 @@ struct Compile {
 						return {{}, 0, MINRX_REG_EBRACE};
 					if (wc != L'}')
 						return {{}, 0, MINRX_REG_BADBR};
+					if ((wc = wconv.nextchr()) == L'?')
+						minimal ^= true, wc = wconv.nextchr();
+					if (minimal)
+						lh = minify(lh);
 					lh = mkrep(lh, m, n, nstk);
-					wc = wconv.nextchr();
 					continue;
 				}
 				// fall through
 			default:
-				if (minimal) {
-					auto [nodes, maxstk, err] = lh;
-					for (auto &n : nodes) n.nstk += 1;
-					nodes.push_front({Node::MinL, {nmin, 0}, maxstk + 1});
-					nodes.push_back({Node::MinR, {nmin++, 0}, maxstk});
-					lh = std::make_tuple(nodes, maxstk + 1, err);
-				}
+				if (minimal)
+					lh = minify(lh);
 				if (optional || infinite) {
 					lh = mkrep(lh, optional, infinite, nstk);
 					optional = infinite = false;
