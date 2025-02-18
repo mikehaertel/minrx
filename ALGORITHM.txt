@@ -1,3 +1,5 @@
+Part I: Structured Non-deterministic Finite Automata (SNFA)
+
 MinRX is an Non-deterministic Finite Automaton (NFA) based regular
 expression matcher that introduces a new algorithm and automaton
 structure for computing the matching substrings of POSIX Extended Regular
@@ -306,7 +308,109 @@ If there is popular demand for right-associative concatenation, or if
 a future edition of the standard explicitly specifies right-associative
 concatenation, that can be implemented in MinRX with a modest code change.
 
-Some caveats:
+Part II: Reconciling non-greedy repetition operators with longest matches
+
+POSIX 2024 introduced "non-greedy" versions of the ? * and + operators,
+named ??, *?, +?, and inspired by the similar operators in Perl-derived
+backtracking "regular expression" matchers.  (Note that Perl "regular
+expressions" are a superset of true regular expressions.)
+
+POSIX 2024 fails to fully specify the behavior of these non-greedy
+constructs, but does express the intent that they should enable finding
+"shortest matches" rather than longest matches.  The standard does
+provides a few examples of expected behavior, which MinRX matches.
+
+Finding "shortest matches" is pretty much in direct conflict with all the
+rest of POSIX regular expression semantics, which are designed to find
+longest-possible matches according to rules that are equally compatible
+with both automata-based as well as backtracking matcher implementations.
+(Or, some might say, the POSIX semantics are equally hostile to both
+automata-based and backtracking implementations!)
+
+MinRX's solution to reconciling the POSIX longest-match principle with
+the desired shortest-match non-greedy operator behavior is as follows:
+For each non-greedy repetition construct, at each live NState in the
+match, MinRX tracks the number of characters that have already been
+matched by that particular repetition.  Once a complete match has
+been reached via a path that includes non-greedy repetitions, MinRX
+*continues* trying to find longer matches as usual, *except* it will
+reject longer matches that would require growing any non-greedy repetition
+beyond its size at the point of the initial shortest accepting match.
+
+So for example, MinRX matching a+? against the string "aaa" will match
+just the first "a", as a Perl user of non-greedy matches would expect.
+This occurs because MinRX reaches an accepting state after matching
+the first "a".  MinRX continues to search for longer matches, but the
+only longer matches available would involve further lengthening the
+non-greedy repetition, which MinRX rejects.  Eventually MinRX exhausts
+remaining live NStates and is left with just the successful match to
+the first "a".
+
+By contrast, MinRX matching a+?(a|aa) against "aaa" will match "aaa":
+the first "a" will be matched by the a+? (as a Perl user would expect)
+and the next two "aa" will be matched by the longer branch of the (a|aa)
+alternative, as a user accustomed to POSIX longest-match semantics would
+expect.  In fact MinRX first finds an accepting state at length 2 by
+matching the shorter "a" branch of the alternative, but MinRX is then
+able to grow the match to length 3 using the longer "aa" branch of the
+alternative, because that extension of the match isn't attempting to
+grow any non-minimal repetition beyond its size at the point of the
+shortest accepting match.
+
+A Perl-style explicitly-backtracking matcher in the same situation, by
+contrast, would match a+?(a|aa) to just the initial "aa" of the "aaa":
+it would match a+? to the first "a", then it would try the "a" branch
+of the alternative first, reach the end of the regexp via that branch,
+and accept that solution as the first complete match that it finds.
+It wouldn't even look at the "aa" branch, even though that could
+lead to a longer match.  So this is an example of how the MinRX
+algorithm differs from Perl regular expressions.
+
+A key property of this approach is that the *only* interaction between
+the non-greedy repetitions and the rest the matching algorithm occurs in
+the pruning of NStates that would grow non-greedy subpatterns too large.
+Most importantly, the SNFA machinery for favoring NStates that best
+satisfy the POSIX recursively-leftmost-longest requirements is untouched
+by the non-greedy operator support.
+
+So the MinRX algorithm yields shortest matches to non-greedy repetitions,
+while simultaneously finding longest matches to all subpatterns that
+are not inside non-greedy repetitions, and it does this regardless of
+the ordering and/or nesting of the greedy and non-greedy subpatterns of
+the regular expression.
+
+In detail, MinRX introduces two new internal bracketing node types MINL
+and MINR, which behave similarly to SUBL and SUBR in recording information
+about what's matched by intervening nodes between them.  MinRX also
+adds a vector of character counts for each non-greedy repetition to
+every NState.
+
+The purpose of MINL...MINR delimiters in the automata is to count
+characters that are matched by SNFA nodes inside non-greedy repetitions.
+Upon traversing a MINL node, MinRX pushes the current match offset onto
+the SNFA stack.  Upon reaching the paired MINR node, MinRX subtracts
+the match offset saved on the stack from the current match offset, and
+adds that many characters to the cumulative count for the corresponding
+minimal repetition.
+
+When multiple paths reach the same NState with different lengths for
+the minimal repetitions, MinRX favors the path with smaller count(s)
+and prunes the path with larger count(s).  This pruning is done at a
+lower priority than the NState pruning that selects the best
+POSIX-conforming leftmost-longest matches.  In this way, MinRX is
+constantly selecting in favor of solutions that minimize the minimal
+repetitions, without otherwise breaking POSIX conformance.
+
+When an accepting state is found, MinRX memorizes the count vector for
+all minimal repetitions along the path that led to that state.  Then,
+although MinRX continues to search forward for additional accepting states
+for even longer matches, it will exclude any potential solutions that
+would further increase the minimal repetition count beyond the limits
+in the memorized vector.  Eventually MinRX exhausts the remaining live
+states, and what's left is a solution for the longest match with the
+minimal repetitions fixed at the length of their shortest solution.
+
+Part III: Some caveats
 
   * This approach does not currently address the problem of POSIX Basic
     Regular Expressions including back-references.  I view BREs with
@@ -318,13 +422,13 @@ Some caveats:
     and it would almost certainly require exponential space even in
     relatively simple cases, and so would be unlikely to be generally usable.
 
-  * It should be noted this algorithm has not yet been proven correct,
-    but it has no "special cases" and has passed a plethora of published
+  * It should be noted this algorithm has not yet been proven correct.
+    However, it has no "special cases" and has passed a plethora of published
     tests, including a number tests that trip up almost all other extant
     attempts to implement POSIX ERE matchers.  I have high hopes for the
     ultimate success of this algorithm given the simplicity.
 
-Future work:
+Part IV: Future work
 
   * Correctness proof and/or fix bugs until correctness proof is possible.
     (Or give up on this approach and look for new ideas...)

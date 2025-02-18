@@ -60,7 +60,7 @@ A detailed description of MinRX's algorithm can be found in [ALGORITHM.txt](ALGO
 
 ## Features
 
-MinRX is a nearly-feature-complete implementation of POSIX 2018 EREs,
+MinRX is a nearly-feature-complete implementation of POSIX 2024 EREs,
 with just two caveats that I'm aware of:
 
 * The `[. .]` syntax inside bracket expressions for "collating element
@@ -119,8 +119,6 @@ At some point I will switch focus to performance and portability.
 Currently planned work:
 
 * "First character" optimization to speed up initial search.
-
-* Implement POSIX 2024 non-greedy repetition operators.
 
 * Improve support for POSIX bracket expression collating elements
   and implement POSIX bracket expression equivalence classes.
