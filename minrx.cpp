@@ -152,17 +152,20 @@ struct COWVec {
 	}
 	~COWVec() { if (storage && --storage->refcnt == 0) storage->u.allocator->dealloc(storage); }
 	template <typename... XArgs>
-	bool cmpgt(const COWVec &other, std::size_t limit, XArgs... xargs) const {
+	bool cmpgt(const COWVec &other, std::size_t start, std::size_t limit, XArgs... xargs) const {
 		std::size_t i;
 		TYPE *xv = &(*storage)[0];
 		TYPE *yv = &(*other.storage)[0];
-		for (i = 0; i < limit - sizeof... (XArgs); i++)
+		for (i = start; i < limit - sizeof... (XArgs); i++)
 			if (xv[i] != yv[i])
 				return xv[i] > yv[i];
 		if constexpr (sizeof...(XArgs) > 0)
 			for (TYPE x : { xargs... })
 				if (x != yv[i++])
 					return x > yv[i - 1];
+		for (i = 0; i < start; i++)
+			if (xv[i] != yv[i])
+				return xv[i] > yv[i];
 		return false;
 	}
 	const TYPE &get(std::size_t idx) const { return (*storage)[idx]; }
@@ -1130,16 +1133,17 @@ struct Execute {
 		NState() {}
 		NState(Vec::Allocator &allocator): substack(allocator) {}
 		template <typename... XArgs>
-		bool cmpgt(const NState &ns, std::size_t gen, std::size_t nstk, XArgs... xargs) const {
+		bool cmpgt(const NState &ns, std::size_t gen, std::size_t nmin, std::size_t nstk, XArgs... xargs) const {
 			if (gen != ns.gen)
 				return gen > ns.gen;
 			if (boff != ns.boff)
 				return boff < ns.boff;
-			return substack.cmpgt(ns.substack, nstk, xargs...);
+			return substack.cmpgt(ns.substack, nmin, nstk, xargs...);
 		}
 	};
 	const Regexp &r;
 	const minrx_regexec_flags_t flags;
+	const std::size_t nmin = r.nmin;
 	const std::size_t suboff = r.nmin + r.nstk;
 	std::size_t gen = 0;
 	std::size_t off = 0;
@@ -1160,7 +1164,7 @@ struct Execute {
 				auto [newly, newns] = ncsv.insert(k, ns);
 				if (newly)
 					new (&newns) NState(ns);
-				else if (ns.cmpgt(newns, gen, nstk, xargs...))
+				else if (ns.cmpgt(newns, gen, nmin, nstk, xargs...))
 					newns = ns;
 				else
 					return;
@@ -1174,7 +1178,7 @@ struct Execute {
 			auto [newly, newns] = epsv.insert(k, ns);
 			if (newly)
 				new (&newns) NState(ns);
-			else if (ns.cmpgt(newns, gen, nstk, xargs...))
+			else if (ns.cmpgt(newns, gen, nmin, nstk, xargs...))
 				newns = ns;
 			else
 				return;
