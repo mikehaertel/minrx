@@ -858,33 +858,26 @@ struct Compile {
 		auto lh = chr(nested, nstk);
 		if (std::get<minrx_result_t>(lh))
 			return lh;
-		bool optional = false, infinite = false, minimal = (flags & MINRX_REG_MINIMAL) != 0;
 		for (;;) {
+			bool infinite = false, minimal = (flags & MINRX_REG_MINIMAL) != 0, optional = false;
 			switch (wc) {
 			case L'?':
 				optional = true;
-				if ((wc = wconv.nextchr()) == L'?')
-					minimal ^= true, wc = wconv.nextchr();
-				continue;
+				goto common;
 			case L'*':
-				optional = infinite = true;
-				if ((wc = wconv.nextchr()) == L'?')
-					minimal ^= true, wc = wconv.nextchr();
-				continue;
+				infinite = optional = true;
+				goto common;
 			case L'+':
 				infinite = true;
-				if ((wc = wconv.nextchr()) == L'?')
+			common:	if ((wc = wconv.nextchr()) == L'?')
 					minimal ^= true, wc = wconv.nextchr();
+				lh = mkrep(minimal ? minify(lh, nstk) : lh, optional, infinite, nstk);
 				continue;
 			case L'{':
 				if ((flags & MINRX_REG_BRACE_COMPAT) == 0
 				    || (enc == WConv::Encoding::Byte ? std::isdigit(wconv.lookahead())
 								     : std::iswdigit(wconv.lookahead())))
 				{
-					if (optional || infinite) {
-						lh = mkrep(lh, optional, infinite, nstk);
-						optional = infinite = false;
-					}
 					wc = wconv.nextchr();
 					if (wc == WConv::End)
 						return {{}, 0, MINRX_REG_EBRACE};
@@ -892,8 +885,9 @@ struct Compile {
 					if (!num(m, wc))
 						return {{}, 0, MINRX_REG_BADBR};
 					if (wc == L'}') {
-						lh = mkrep(lh, m, m, nstk);
-						wc = wconv.nextchr();
+						if ((wc = wconv.nextchr()) == L'?')
+							minimal ^= true, wc = wconv.nextchr();
+						lh = mkrep(minimal ? minify(lh, nstk) : lh, m, m, nstk);
 						continue;
 					}
 					if (wc == WConv::End)
@@ -902,8 +896,9 @@ struct Compile {
 						return {{}, 0, MINRX_REG_BADBR};
 					wc = wconv.nextchr();
 					if (wc == L'}') {
-						lh = mkrep(lh, m, -1, nstk);
-						wc = wconv.nextchr();
+						if ((wc = wconv.nextchr()) == L'?')
+							minimal ^= true, wc = wconv.nextchr();
+						lh = mkrep(minimal ? minify(lh, nstk) : lh, m, -1, nstk);
 						continue;
 					}
 					if (!num(n, wc))
@@ -914,19 +909,11 @@ struct Compile {
 						return {{}, 0, MINRX_REG_BADBR};
 					if ((wc = wconv.nextchr()) == L'?')
 						minimal ^= true, wc = wconv.nextchr();
-					if (minimal)
-						lh = minify(lh, nstk);
-					lh = mkrep(lh, m, n, nstk);
+					lh = mkrep(minimal ? minify(lh, nstk) : lh, m, n, nstk);
 					continue;
 				}
 				// fall through
 			default:
-				if (minimal)
-					lh = minify(lh, nstk);
-				if (optional || infinite) {
-					lh = mkrep(lh, optional, infinite, nstk);
-					optional = infinite = false;
-				}
 				return lh;
 			}
 		}
