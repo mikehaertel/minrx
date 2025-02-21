@@ -337,6 +337,11 @@ been reached via a path that includes non-greedy repetitions, MinRX
 reject longer matches that would require growing any non-greedy repetition
 beyond its size at the point of the initial shortest accepting match.
 
+When non-greedy repetitions are nested inside containing non-greedy
+repetitions, MinRX uses a stack of non-greedy counts to ensure that
+the rules of non-greediness are recursively followed at every level
+of nesting.
+
 So for example, MinRX matching a+? against the string "aaa" will match
 just the first "a", as a Perl user of non-greedy matches would expect.
 This occurs because MinRX reaches an accepting state after matching
@@ -402,14 +407,15 @@ In this way, MinRX is constantly selecting in favor of solutions that
 minimize the non-greedy repetitions, without otherwise breaking POSIX
 conformance for cases that have no non-greedy repetitions.
 
-When an accepting state is found, MinRX memorizes the count vector for
-all minimal repetitions along the path that led to that state.  Then,
-although MinRX continues to search forward for additional accepting states
-for even longer matches, it will exclude any potential solutions that
-would further increase the minimal repetition count beyond the limits
-in the memorized vector.  Eventually MinRX exhausts the remaining live
-states, and what's left is a solution for the longest match with the
-minimal repetitions fixed at the length of their shortest solution.
+When an accepting state is found, MinRX freezes the top-level minimal
+repetition count, prohibiting subexpressions inside minimal repetitions
+from matching any more characters.  With this limitation enforced,
+MinRX continues to search forward for additional accepting states of
+even longer matches, but discarding any states that would increase the
+count of characters matched by minimal repetitions.  Eventually MinRX
+exhausts the remaining live states, and what's left is a solution for
+the longest match with the minimal repetitions fixed at the length of
+their shortest possible solution.
 
 Part III: Some caveats
 

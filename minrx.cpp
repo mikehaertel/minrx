@@ -678,8 +678,8 @@ struct Node {
 		Goto,			// args = offset to next goto, offset to just after join
 		Join,			// args = none (but supplies incoming stack depth for next node)
 		Loop,			// args = offset to next, optional flag
-		MinL,			// args = minimized construct number
-		MinR,			// args = minimized construct number
+		MinL,			// args = this minified subexpression nesting depth
+		MinR,			// args = this minified subexpression nesting depth, flag: has even-more-nested minified subexpression(s)
 		Next,			// args = offset to loop, infinite flag
 		Skip,			// args = offset over skipped nodes
 		SubL,			// args = minimum and maximum contained subexpression numbers
@@ -791,9 +791,17 @@ struct Compile {
 	}
 	Subexp minify(const Subexp &lh, NInt nstk) {
 		auto [nodes, maxstk, err] = lh;
-		for (auto &n : nodes) n.nstk += 1;
-		nodes.push_front({Node::MinL, {nmin, 0}, nstk + 1});
-		nodes.push_back({Node::MinR, {nmin++, 0}, nstk});
+		NInt maxdepth = 0;
+		for (auto &n : nodes) {
+			n.nstk += 1;
+			if (n.type == Node::MinL)
+				++n.args[0], maxdepth = std::max(maxdepth, n.args[0]);
+			if (n.type == Node::MinR)
+				++n.args[0];
+		}
+		nmin = std::max(maxdepth + 1, nmin);
+		nodes.push_front({Node::MinL, {0, 0},  nstk + 1});
+		nodes.push_back({Node::MinR, {0, maxdepth > 0}, nstk});
 		return {nodes, maxstk + 1, err};
 	}
 	Subexp mkrep(const Subexp &lh, bool optional, bool infinite, NInt nstk) {
@@ -1190,12 +1198,7 @@ struct Execute {
 					auto b = ns.boff, e = off;
 					if (!best.has_value()
 					    || b < best->get(suboff + 0)
-					    || (b == best->get(suboff + 0) && e >= best->get(suboff + 1) && (r.nmin == 0 || [&]() {
-							for (std::size_t i = 0; i < r.nmin; ++i)
-								if (best->get(i) != 0 && ns.substack.get(i) != 0 && ns.substack.get(i) < best->get(i))
-									return false;
-							return true;
-						}())))
+					    || (b == best->get(suboff + 0) && e >= best->get(suboff + 1) && (r.nmin == 0 || ns.substack.get(0) >= best->get(0))))
 					{
 						best = ns.substack;
 						best->put(suboff + 0, b);
@@ -1236,6 +1239,8 @@ struct Execute {
 					std::size_t newlen = (std::size_t) -1 - (oldlen + (off - ns.substack.get(nstk)));
 					NState nscopy = ns;
 					nscopy.substack.put(n.args[0], newlen);
+					if (n.args[1])
+						nscopy.substack.put(n.args[0] + 1, -1);
 					add(ncsv, k + 1, nstk, nscopy, wcnext);
 				}
 				break;
@@ -1320,8 +1325,6 @@ struct Execute {
 			while (wcnext != WConv::End && (std::ptrdiff_t) off < rm[0].rm_eo)
 				wcprev = wcnext, off = wconv.off(), wcnext = wconv.nextchr();
 		NState nsinit(allocator);
-		for (std::size_t i = 0; i < r.nmin; ++i)
-			nsinit.substack.put(i, 0);
 		nsinit.boff = off;
 		add(mcsvs[0], 0, 0, nsinit, wcnext);
 		if (!epsq.empty())
