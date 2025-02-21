@@ -55,7 +55,9 @@ typedef enum {				/* Flags for minrx_reg*comp() */
 typedef enum {				/* Flags for minrx_reg*exec() */
 	MINRX_REG_NOTBOL = 1,		/* POSIX option: don't match ^ at beginning of string */
 	MINRX_REG_NOTEOL = 2,		/* POSIX option: don't match $ at end of string */
-	MINRX_REG_RESUME = 4,		/* MinRX extension: resume search from rm[0].rm_eo */
+	MINRX_REG_FIRSTSUB = 4,		/* MinRX extension: repeated subexpressions capture their first occurrence (rather than last) */
+	MINRX_REG_NOSUBRESET = 8,	/* MinRX extension: repeated subexpressions don't clear their contained subexpressions */
+	MINRX_REG_RESUME = 16,		/* MinRX extension: resume search from rm[0].rm_eo */
 } minrx_regexec_flags_t;
 
 typedef enum {				/* Return values from minrx_reg*comp() and minrx_reg*exec() */

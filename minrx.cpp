@@ -1252,8 +1252,8 @@ struct Execute {
 				{
 					NState nscopy = ns;
 					nscopy.substack.put(nstk - 1, off);
-					if (n.args[0] != (NInt) -1)
-						for (auto i = n.args[0]; i <= n.args[1]; ++i) {
+					if (n.args[0] != (NInt) -1 && (flags & MINRX_REG_NOSUBRESET) == 0)
+						for (auto i = n.args[0] + 1; i <= n.args[1]; ++i) {
 							nscopy.substack.put(suboff + i * 2, -1);
 							nscopy.substack.put(suboff + i * 2 + 1, -1);
 						}
@@ -1261,7 +1261,7 @@ struct Execute {
 				}
 				break;
 			case Node::SubR:
-				if (n.args[0] != (NInt) -1) {
+				if (n.args[0] != (NInt) -1 && ((flags & MINRX_REG_FIRSTSUB) == 0 || ns.substack.get(suboff + n.args[0] * 2) == (NInt) -1)) {
 					NState nscopy = ns;
 					nscopy.substack.put(suboff + n.args[0] * 2 + 0, ns.substack.get(nstk));
 					nscopy.substack.put(suboff + n.args[0] * 2 + 1, off);

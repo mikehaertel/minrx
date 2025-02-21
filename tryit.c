@@ -22,10 +22,14 @@ main(int argc, char *argv[])
 			cflags |= MINRX_REG_BRACE_COMPAT;
 		else if (strcmp(argv[1], "-e") == 0)
 			cflags |= MINRX_REG_BRACK_ESCAPE;
+		else if (strcmp(argv[1], "-f") == 0)
+			eflags |= MINRX_REG_FIRSTSUB;
 		else if (strcmp(argv[1], "-i") == 0)
 			cflags |= MINRX_REG_ICASE;
 		else if (strcmp(argv[1], "-n") == 0)
 			cflags |= MINRX_REG_NEWLINE;
+		else if (strcmp(argv[1], "-r") == 0)
+			eflags |= MINRX_REG_NOSUBRESET;
 		else if (strcmp(argv[1], "--gawk") == 0)
 			cflags |= MINRX_REG_EXTENSIONS_BSD | MINRX_REG_EXTENSIONS_GNU | MINRX_REG_BRACE_COMPAT | MINRX_REG_BRACK_ESCAPE;
 		--argc, ++argv;
@@ -37,8 +41,10 @@ main(int argc, char *argv[])
 		fprintf(stderr, "\t-a\tfind all matches\n");
 		fprintf(stderr, "\t-c\tenable curly brace compatibility\n");
 		fprintf(stderr, "\t-e\tenable backslash quoting in [...]\n");
+		fprintf(stderr, "\t-f\tsubexpressions capture their first occurrence (rather than last)\n");
 		fprintf(stderr, "\t-i\tignore case\n");
 		fprintf(stderr, "\t-n\texclude newline from . and [^...] and treat as ^$ delimiter\n");
+		fprintf(stderr, "\t-r\trepeated subexpressions don't reset contained subexpressions\n");
 		fprintf(stderr, "\t--gawk\tequivalent to -B -G -c -e\n");
 		exit(EXIT_FAILURE);
 	}
