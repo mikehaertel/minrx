@@ -274,13 +274,22 @@ But if for a particular search string there are multiple solutions for
 the lengths of A, B, and C that yield the the same leftmost-longest
 overall solution for ABC, which should be chosen?  Either we can try
 to maximize AB at the expense of shortening C, or else we can try
-to maximize A at the expense of shortening BC.
+to maximize A at the expense of shortening BC.  The former corresponds
+to left-associative concatenation: ABC is equavalent to (AB)C.
+The latter corresponds to right associative concatenation: ABC is
+equivalent to A(BC).
 
 It turns out the POSIX standard is ambiguous about this situation.
-The grammar in the standard for concatenated regular expressions is a
-left-associative grammar.  However, there is an example in the rationale
-(not officially part of the standard...) that assumes concatenation is
-is right-associative.
+The production in the standard's formal grammar at the nonterminal
+symbol for concatenation is a left-associative production.  However, the
+standard also contains the phrase "Consistent with the whole match being
+the longest of the leftmost matches, each subpattern, from left to right,
+shall match the longest possible string."  Nowhere else in the standard
+is the word subpattern defined or used.  Are the subpatterns of ABC:
+AB and C, A and BC, or A, B, and C?  The standard doesn't say.  If the
+subpatterns are A, B, and C, then the standard is saying to maximize A at
+the expense of B and C.  However the only example in corresponding
+paragraph of the standard has just 2 subpatterns.
 
 The SNFA approach can implement either option for the associativity
 of concatenation.  The default stack frames and translation scheme
