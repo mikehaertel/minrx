@@ -63,7 +63,7 @@ Each NState is labeled with the position in the input string at which
 the path leading to the NState was first introduced to the search.
 Whenever two NState reach the same node in the SNFA, only the NState that
 originated earlier in the search string is retained.  This ensures that
-MinRX will find the longest match.  If two NStates with the same starting
+MinRX will find the leftmost match.  If two NStates with the same starting
 position advance to the same node, additional criteria described later
 determine which will be retained and which discarded.
 
