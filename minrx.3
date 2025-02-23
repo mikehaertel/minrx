@@ -1,4 +1,4 @@
-.TH MINRX 3 "July 2024"
+.TH MINRX 3 "Feburary 2025"
 .SH NAME
 minrx \- A minimal POSIX-compliant matcher for extended regular expressions
 .SH SYNOPSIS
@@ -22,11 +22,16 @@ void minrx_regfree(minrx_regex_t *re);
 .ft R
 .SH DESCRIPTION
 .PP
-.I Minrx
+.I MinRX
 is a minimalistic POSIX-compliant regular expression matcher
 for POSIX Extended Regular Expressions (EREs).
 POSIX Basic Regular Expressions (BREs) are not
 supported.
+.PP
+.I MinRX
+supports full POSIX 2024 ERE semantics, including support
+for non-greedy (or ``minimal'') matching with the
+\f(CW??\fP, \f(CW*?\fP, \f(CW+?\fP, and \f(CW{}?\fP, operators.
 .PP
 Regular expression use happens in two stages. First you
 .I compile
@@ -58,6 +63,9 @@ Required in current version of
 .TP
 \f(CWMINRX_REG_ICASE\fP
 Ignore case in pattern and search.
+.TP
+\f(CWMINRX_REG_MINIMAL\fP
+Make minimal matching the default.
 .TP
 \f(CWMINRX_REG_NEWLINE\fP
 Exclude \f(CW\en\fP from \f(CW.\fP
@@ -180,9 +188,44 @@ Don't match \f(CW^\fP at beginning of string.
 \f(CWMINRX_REG_NOTEOL\fP
 Don't match \f(CW$\fP at end of string.
 .TP
+\f(CWMINRX_REG_FIRSTSUB\fP
+When there is a parenthesized subexpression that is the operand of
+a repeat operator
+(\f(CW*\fP, \f(CW+\fP, or \f(CW{}\fP),
+capture the first repeated subexpression. The POSIX default
+is to capture the last.
+This is a MinRX extension.
+.TP
+\f(CWMINRX_REG_NOSUBRESET\fP
+By default, with
+a repeated parenthesized subexpression with
+captures inside it, every time the match enters a new occurrence
+of the outer parenthesized subexpression, it
+.I "clears the memory"
+of any captures made by the inner subexpressions during the previous
+occurrence of the outer subexpression.   So all captures, of both
+the outer parenthesized expression as well as any inner parenthesized
+subexpressions that it contains, will be from the
+.I last
+occurrence of the outer subexpression.
+.IP
+This flag makes an outer capture group
+.I not
+clear the memory of
+previous inner captures.  So with a repeated subexpression
+that contains parenthesized subexpressions, one can (sometimes) see
+results of the inner captures dating to previous occurrences of the
+outer capture group.
+.IP
+Note that enabling \f(CWMINRX_REG_NOSUBRESET\fP
+makes MinRX compatible with how all
+three of Perl, Python, and Ruby treat nested captures that are inside
+repeated subexpressions.
+This is a MinRX extension.
+.TP
 \f(CWMINRX_REG_RESUME\fP
 Resume search from \f(CWrm[0].rm_eo\fP.
-This is a Minrx extension.
+This is a MinRX extension.
 .RE
 .PP
 The following values may be returned from
@@ -201,7 +244,7 @@ Match not found.
 Unknown error code. (This shouldn't happen.)
 .RE
 .SS Subexpression Matching
-.I Minrx
+.I MinRX
 not only indicates whether text matched or not, it can also return information
 indicating where in the text the regular expression matched. In addition,
 it can return information about
@@ -248,7 +291,7 @@ Michael J. Haertel, \f(CWmike@ducky.net\fP.
 .PP
 This manual page was written by Arnold Robbins, \f(CWarnold@skeeve.com\fP.
 .SH COPYRIGHT FOR THIS MANUAL PAGE
-Copyright 2024 Arnold David Robbins
+Copyright 2024, 2025, Arnold David Robbins.
 .PP
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions
