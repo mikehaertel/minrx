@@ -807,10 +807,10 @@ struct Compile {
 	Subexp mkrep(const Subexp &lh, bool optional, bool infinite, NInt nstk) {
 		auto [lhs, lhmaxstk, _] = lh;
 		if (optional && !infinite) {
-			for (auto &l : lhs) l.nstk += 1;
+			for (auto &l : lhs) l.nstk += 2;
 			auto lhsize = lhs.size();
-			lhs.push_front({Node::Skip, {lhsize, 0}, nstk + 1});
-			return {lhs, lhmaxstk + 1, MINRX_REG_SUCCESS};
+			lhs.push_front({Node::Skip, {lhsize, 0}, nstk + 2});
+			return {lhs, lhmaxstk + 2, MINRX_REG_SUCCESS};
 		} else {
 			for (auto &l : lhs) l.nstk += 3;
 			auto lhsize = lhs.size();
@@ -841,9 +841,9 @@ struct Compile {
 			lhmaxstk += 1;
 			rhmaxstk += 1;
 			for (auto &r : rhs)
-				r.nstk += 1;
+				r.nstk += 2;
 			auto rhsize = rhs.size();
-			rhs.push_front({Node::Skip, {rhsize, 0}, nstk + 1});
+			rhs.push_front({Node::Skip, {rhsize, 1}, nstk + 2});
 			for (; k < n; ++k)
 				lhs.insert(lhs.end(), rhs.begin(), rhs.end());
 		}
@@ -1250,8 +1250,8 @@ struct Execute {
 					add(ncsv, k - n.args[0], nstk + 3, ns, wcnext, ns.substack.get(nstk), ns.substack.get(nstk + 1) - 1, (NInt) off);
 				break;
 			case Node::Skip:
-				add(ncsv, k + 1, nstk, ns, wcnext, (NInt) 0);
-				add(ncsv, k + 1 + n.args[0], nstk, ns, wcnext, (NInt) 1);
+				add(ncsv, k + 1, nstk, ns, wcnext, (NInt) off, (NInt) 1 ^ n.args[1]);
+				add(ncsv, k + 1 + n.args[0], nstk, ns, wcnext, (NInt) off, (NInt) 0 ^ n.args[1]);
 				break;
 			case Node::SubL:
 				{
