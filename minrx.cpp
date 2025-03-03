@@ -1398,6 +1398,24 @@ minrx_regexec(minrx_regex_t *rx, const char *s, std::size_t nm, minrx_regmatch_t
 	return minrx_regnexec(rx, strlen(s), s, nm, rm, flags);
 }
 
+// Return true if in a UTF-8 locale. This can't cache a result, as
+// the locale can change at any time.
+static bool
+is_utf8()
+{
+	static const wchar_t greek_alpha = 0x3b1;
+	wchar_t wc = 0;
+	mbstate_t mbs;
+
+	memset(&mbs, 0, sizeof(mbs));
+
+	auto n = mbrtowc(& wc, "\316\261", 2, &mbs);
+	if (n == 0 || n == (std::size_t) -1 || n == (std::size_t) -2)
+		return false;
+
+	return wc == greek_alpha;
+}
+
 int
 minrx_regncomp(minrx_regex_t *rx, std::size_t ns, const char *s, int flags)
 {
@@ -1405,12 +1423,7 @@ minrx_regncomp(minrx_regex_t *rx, std::size_t ns, const char *s, int flags)
 	auto loc = std::setlocale(LC_CTYPE, nullptr);
 	if ((loc != nullptr && loc[0] == 'C' && loc[1] == '\0') || ((flags & MINRX_REG_NATIVE1B) != 0 && MB_CUR_MAX == 1))
 		enc = MinRX::WConv::Encoding::Byte;
-	else if (auto utf = std::strchr(loc ? loc : "", '.');
-		 utf != nullptr && (utf[1] == 'U' || utf[1] == 'u')
-				&& (utf[2] == 'T' || utf[2] == 't')
-				&& (utf[3] == 'F' || utf[3] == 'f')
-				&& (   (utf[4] == '8' && utf[5] == '\0')
-				    || (utf[4] == '-' && utf[5] == '8' && utf[6] == '\0')))
+	else if (is_utf8())
 		enc = MinRX::WConv::Encoding::UTF8;
 	auto r = MinRX::Compile(enc, s, s + ns, (minrx_regcomp_flags_t) flags).compile();
 	rx->re_regexp = r;
