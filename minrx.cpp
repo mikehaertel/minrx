@@ -868,6 +868,7 @@ struct Compile {
 			return lh;
 		for (;;) {
 			bool infinite = false, minimal = (flags & MINRX_REG_MINIMAL) != 0, optional = false;
+			bool no_posix_2024 = (flags & MINRX_REG_NO_POSIX_2024) != 0;
 			switch (wc) {
 			case L'?':
 				optional = true;
@@ -877,7 +878,9 @@ struct Compile {
 				goto common;
 			case L'+':
 				infinite = true;
-			common:	if ((wc = wconv.nextchr()) == L'?')
+			common:	if (no_posix_2024) 
+					minimal = false, wc = wconv.nextchr();
+				else if ((wc = wconv.nextchr()) == L'?')
 					minimal ^= true, wc = wconv.nextchr();
 				lh = mkrep(minimal ? minify(lh, nstk) : lh, optional, infinite, nstk);
 				continue;

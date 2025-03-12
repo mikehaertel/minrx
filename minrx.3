@@ -1,4 +1,4 @@
-.TH MINRX 3 "July 2024"
+.TH MINRX 3 "March 2025"
 .SH NAME
 minrx \- A minimal POSIX-compliant matcher for extended regular expressions
 .SH SYNOPSIS
@@ -93,6 +93,10 @@ This will produce sensible results only in \f(CWLC_CTYPE\fP locales
 that have the same encodings as ASCII/ISO8859 for the regular expression
 special characters.
 .RE
+.TP
+\f(CWMINRX_REG_NO_POSIX_2024\fP
+Disable new features added by the POSIX 2024 standard.
+In particular, disable the non-greedy operators.
 .PP
 The following values may be returned from
 \f(CWminrx_regcomp()\fP
@@ -232,7 +236,7 @@ Michael J. Haertel, \f(CWmike@ducky.net\fP.
 .PP
 This manual page was written by Arnold Robbins, \f(CWarnold@skeeve.com\fP.
 .SH COPYRIGHT FOR THIS MANUAL PAGE
-Copyright 2024 Arnold David Robbins
+Copyright 2024, 2025 Arnold David Robbins
 .PP
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions

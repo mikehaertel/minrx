@@ -30,18 +30,21 @@ main(int argc, char *argv[])
 			cflags |= MINRX_REG_NEWLINE;
 		else if (strcmp(argv[1], "-r") == 0)
 			eflags |= MINRX_REG_NOSUBRESET;
+		else if (strcmp(argv[1], "-g") == 0)
+			cflags |= MINRX_REG_NO_POSIX_2024;
 		else if (strcmp(argv[1], "--gawk") == 0)
 			cflags |= MINRX_REG_EXTENSIONS_BSD | MINRX_REG_EXTENSIONS_GNU | MINRX_REG_BRACE_COMPAT | MINRX_REG_BRACK_ESCAPE;
 		--argc, ++argv;
 	}
 	if (argc != 3) {
-		fprintf(stderr, "usage: tryit (-B|-G|-a|-c|-e|-i|-n|--gawk)* <regexp> <string>\n");
+		fprintf(stderr, "usage: tryit (-B|-G|-a|-c|-e|-g|-i|-n|--gawk)* <regexp> <string>\n");
 		fprintf(stderr, "\t-B\tenable BSD extensions \\< \\>\n");
 		fprintf(stderr, "\t-G\tenable GNU extensions \\` \\' \\b \\B \\s \\S \\w \\W\n");
 		fprintf(stderr, "\t-a\tfind all matches\n");
 		fprintf(stderr, "\t-c\tenable curly brace compatibility\n");
 		fprintf(stderr, "\t-e\tenable backslash quoting in [...]\n");
 		fprintf(stderr, "\t-f\tsubexpressions capture their first occurrence (rather than last)\n");
+		fprintf(stderr, "\t-g\tdisallow non-greedy operators\n");
 		fprintf(stderr, "\t-i\tignore case\n");
 		fprintf(stderr, "\t-n\texclude newline from . and [^...] and treat as ^$ delimiter\n");
 		fprintf(stderr, "\t-r\trepeated subexpressions don't reset contained subexpressions\n");
