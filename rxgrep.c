@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2024,
+ * Copyright (C) 2024, 2025,
  * Arnold David Robbins
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,6 +33,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include <getopt.h>
+#include <locale.h>
 #include <regex.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -44,8 +45,8 @@
 
 #include "minrx.h"
 
-#define VERSION		"0.2"
-#define COPYRIGHT_YEAR	2024
+#define VERSION		"0.3"
+#define COPYRIGHT_YEAR	2025
 
 /* The name the program was invoked under, for error messages */
 const char *myname;
@@ -97,6 +98,8 @@ main(int argc, char **argv)
 {
 	char **pattern_list = NULL;
 	int i;
+
+	(void) setlocale(LC_ALL, "");
 
 	parse_args(argc, argv);
 	set_syntax_flags();
