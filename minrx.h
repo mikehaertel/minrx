@@ -49,7 +49,8 @@ typedef enum {				/* Flags for minrx_reg*comp() */
 	MINRX_REG_BRACK_ESCAPE = 64,	/* MinRX extension: bracket expressions [...] allow backslash escapes */
 	MINRX_REG_EXTENSIONS_BSD = 128,	/* MinRX extension: enable BSD extensions \< and \> */
 	MINRX_REG_EXTENSIONS_GNU = 256,	/* MinRX extension: enable GNU extensions \b \B \s \S \w \W */
-	MINRX_REG_NATIVE1B = 512	/* MinRX extension: use native encoding for 8-bit character sets (MB_CUR_LEN == 1) */
+	MINRX_REG_NATIVE1B = 512,	/* MinRX extension: use native encoding for 8-bit character sets (MB_CUR_LEN == 1) */
+	MINRX_REG_NO_POSIX_2024 = 1024,	/* MinRX extension: disallow non-greedy operators */
 } minrx_regcomp_flags_t;
 
 typedef enum {				/* Flags for minrx_reg*exec() */
