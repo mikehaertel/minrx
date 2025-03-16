@@ -71,9 +71,9 @@ with just two caveats that I'm aware of:
   would be needed to implement this syntax.
 
 * The `[= =]` syntax inside bracket expressions for "collating element
-  equivalence classes" is *entirely* unimplemented.  Again, as far
-  as I know there is no portable POSIX API that gives access to access
-  to the necessary locale information.
+  equivalence classes" uses a portable but ugly mechanism for finding
+  equivalent characters.  Here too, it'd be nice if there were some
+  standard way to find the necessary locale information.
 
 MinRX also provides a few BSD extensions (`\< \>`) and GNU extensions
 (<code>\\\` \\' \b \B \s \S \w \W</code>) that can be optionally enabled
