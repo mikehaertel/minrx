@@ -267,7 +267,7 @@ struct QVec {
 	}
 	bool contains(UINT k) const { return qset.contains(k); }
 	bool empty() const { return qset.empty(); }
-	std::tuple<bool, DATA&> insert(UINT k, const DATA& v) {
+	std::tuple<bool, DATA&> insert(UINT k, const DATA&) {
 		bool newly = qset.insert(k);
 		// WARNING: if newly inserted then we are returning a reference to uninitialized memory
 		// and it is the caller's responsibility to construct valid DATA there.
@@ -303,7 +303,7 @@ public:
 	WConv(Encoding e, const char *bp): WConv(e, bp, bp + std::strlen(bp)) { }
 	auto lookahead() const { return WConv(*this).nextchr(); }
 	WChar nextchr() { return (this->*nextfn)(); }
-	WChar nextbyte() { return cp != ep ? (unsigned char) *cp++ : End; }
+	WChar nextbyte() { return cp != ep ? (unsigned char) *cp++ : (WChar) End; }
 	WChar nextmbtowc() {
 		wchar_t wct = L'\0';
 		if (cp != ep) {
