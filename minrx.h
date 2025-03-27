@@ -49,7 +49,8 @@ typedef enum {				/* Flags for minrx_reg*comp() */
 	MINRX_REG_BRACK_ESCAPE = 64,	/* MinRX extension: bracket expressions [...] allow backslash escapes */
 	MINRX_REG_EXTENSIONS_BSD = 128,	/* MinRX extension: enable BSD extensions \< and \> */
 	MINRX_REG_EXTENSIONS_GNU = 256,	/* MinRX extension: enable GNU extensions \b \B \s \S \w \W */
-	MINRX_REG_NATIVE1B = 512	/* MinRX extension: use native encoding for 8-bit character sets (MB_CUR_LEN == 1) */
+	MINRX_REG_NATIVE1B = 512,	/* MinRX extension: use native encoding for 8-bit character sets (MB_CUR_LEN == 1) */
+	MINRX_REG_DEBUG_COMP = 1024,	/* MinRX extension: get debug prints during compilation phase */
 } minrx_regcomp_flags_t;
 
 typedef enum {				/* Flags for minrx_reg*exec() */
@@ -58,6 +59,7 @@ typedef enum {				/* Flags for minrx_reg*exec() */
 	MINRX_REG_FIRSTSUB = 4,		/* MinRX extension: repeated subexpressions capture their first occurrence (rather than last) */
 	MINRX_REG_NOSUBRESET = 8,	/* MinRX extension: repeated subexpressions don't clear their contained subexpressions */
 	MINRX_REG_RESUME = 16,		/* MinRX extension: resume search from rm[0].rm_eo */
+	MINRX_REG_DEBUG_EXEC = 32,	/* MinRX extension: get debug prints during execution phase */
 } minrx_regexec_flags_t;
 
 typedef enum {				/* Return values from minrx_reg*comp() and minrx_reg*exec() */

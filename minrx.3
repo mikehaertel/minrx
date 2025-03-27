@@ -1,4 +1,4 @@
-.TH MINRX 3 "July 2024"
+.TH MINRX 3 "March 2025"
 .SH NAME
 minrx \- A minimal POSIX-compliant matcher for extended regular expressions
 .SH SYNOPSIS
@@ -92,6 +92,12 @@ between compilation and execution.
 This will produce sensible results only in \f(CWLC_CTYPE\fP locales
 that have the same encodings as ASCII/ISO8859 for the regular expression
 special characters.
+.TP
+\f(CWMINRX_REG_DEBUG_COMP\fP
+Have
+.I MinRX
+print debugging statements during the compilation phase.
+This is a Minrx extension.
 .RE
 .PP
 The following values may be returned from
@@ -166,6 +172,12 @@ Don't match \f(CW$\fP at end of string.
 .TP
 \f(CWMINRX_REG_RESUME\fP
 Resume search from \f(CWrm[0].rm_eo\fP.
+This is a Minrx extension.
+.TP
+\f(CWMINRX_REG_DEBUG_EXEC\fP
+Have
+.I MinRX
+print debugging statements during the execution phase.
 This is a Minrx extension.
 .RE
 .PP
