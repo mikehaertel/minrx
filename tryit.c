@@ -30,6 +30,16 @@ main(int argc, char *argv[])
 			cflags |= MINRX_REG_NEWLINE;
 		else if (strcmp(argv[1], "-r") == 0)
 			eflags |= MINRX_REG_NOSUBRESET;
+		else if (strcmp(argv[1], "--mindisable") == 0)
+			cflags |= MINRX_REG_MINDISABLE;
+		else if (strcmp(argv[1], "--minglobal") == 0)
+			cflags |= MINRX_REG_MINGLOBAL;
+		else if (strcmp(argv[1], "--minscoped") == 0)
+			cflags |= MINRX_REG_MINSCOPED;
+		else if (strcmp(argv[1], "--rptminfast") == 0)
+			cflags |= MINRX_REG_RPTMINFAST;
+		else if (strcmp(argv[1], "--rptminslow") == 0)
+			cflags |= MINRX_REG_RPTMINSLOW;
 		else if (strcmp(argv[1], "--gawk") == 0)
 			cflags |= MINRX_REG_EXTENSIONS_BSD | MINRX_REG_EXTENSIONS_GNU | MINRX_REG_BRACE_COMPAT | MINRX_REG_BRACK_ESCAPE;
 		--argc, ++argv;
@@ -44,8 +54,12 @@ main(int argc, char *argv[])
 		fprintf(stderr, "\t-f\tsubexpressions capture their first occurrence (rather than last)\n");
 		fprintf(stderr, "\t-i\tignore case\n");
 		fprintf(stderr, "\t-n\texclude newline from . and [^...] and treat as ^$ delimiter\n");
-		fprintf(stderr, "\t-r\trepeated subexpressions don't reset contained subexpressions\n");
-		fprintf(stderr, "\t--gawk\tequivalent to -B -G -c -e\n");
+		fprintf(stderr, "\t--mindisable\n\t\tenable the MINRX_REG_MINDISABLE compilation flag\n");
+		fprintf(stderr, "\t--minglobal\n\t\tenable the MINRX_REG_MINGLOBAL compilation flag\n");
+		fprintf(stderr, "\t--minscoped\n\t\tenable the MINRX_REG_MINSCOPED compilation flag\n");
+		fprintf(stderr, "\t--rptminfast\n\t\tenable the MINRX_REG_RPTMINFAST compilation flag\n");
+		fprintf(stderr, "\t--rptminslow\n\t\tenable the MINRX_REG_RPTMINSLOW compilation flag\n");
+		fprintf(stderr, "\t--gawk\n\t\tequivalent to -B -G -c -e\n");
 		exit(EXIT_FAILURE);
 	}
 	minrx_regex_t rx;
