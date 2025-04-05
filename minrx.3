@@ -93,6 +93,22 @@ This will produce sensible results only in \f(CWLC_CTYPE\fP locales
 that have the same encodings as ASCII/ISO8859 for the regular expression
 special characters.
 .TP
+\f(CWMINRX_REG_MINDISABLE\fP
+Disable POSIX 2024 minimal repetitions.
+.IP
+This option potentially enables better backwards compatibility
+with undefined behavior as implemented by certain widely-used
+pre-POSIX 2024 matchers.
+.IP
+In principle this flag is logically unnecessary, since all
+previous editions of the POSIX standard have stated that
+multiple adjacent repetition operators produce undefined results.
+POSIX 2024 added minimal repetitions by giving a new meaning to
+(only) this formerly-undefined syntax.  No regular expression
+that relies solely on defined behavior of earlier POSIX
+standards will have its meaning changed by the addition of
+minimal repetitions in POSIX 2024.
+.TP
 \f(CWMINRX_REG_DEBUG_COMP\fP
 Have
 .I MinRX

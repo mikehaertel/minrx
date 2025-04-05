@@ -151,19 +151,27 @@ struct COWVec {
 		return *this;
 	}
 	~COWVec() { if (storage && --storage->refcnt == 0) storage->u.allocator->dealloc(storage); }
+	auto cmp(std::size_t o, std::size_t n, const COWVec &other) const {
+		const TYPE *xv = &(*storage)[0];
+		const TYPE *yv = &(*other.storage)[0];
+		for (std::size_t i = 0; i < n; i++)
+			if (xv[o + i] != yv[o + i])
+				return xv[o + i] <=> yv[o + i];
+		return (TYPE) 0 <=> (TYPE) 0;
+	}
 	template <typename... XArgs>
-	bool cmpgt(const COWVec &other, std::size_t limit, XArgs... xargs) const {
+	auto cmp(const COWVec &other, std::size_t limit, XArgs... xargs) const {
 		std::size_t i;
-		TYPE *xv = &(*storage)[0];
-		TYPE *yv = &(*other.storage)[0];
+		const TYPE *xv = &(*storage)[0];
+		const TYPE *yv = &(*other.storage)[0];
 		for (i = 0; i < limit - sizeof... (XArgs); i++)
 			if (xv[i] != yv[i])
-				return xv[i] > yv[i];
+				return xv[i] <=> yv[i];
 		if constexpr (sizeof...(XArgs) > 0)
 			for (TYPE x : { xargs... })
 				if (x != yv[i++])
-					return x > yv[i - 1];
-		return false;
+					return x <=> yv[i - 1];
+		return (TYPE) 0 <=> (TYPE) 0;
 	}
 	const TYPE &get(std::size_t idx) const { return (*storage)[idx]; }
 	COWVec &put(std::size_t idx, TYPE val) {
@@ -678,8 +686,10 @@ struct Node {
 		Goto,			// args = offset to next goto, offset to just after join
 		Join,			// args = none (but supplies incoming stack depth for next node)
 		Loop,			// args = offset to next, optional flag
+		MinB,			// args = this minified subexpression nesting depth
 		MinL,			// args = this minified subexpression nesting depth
-		MinR,			// args = this minified subexpression nesting depth, flag: has even-more-nested minified subexpression(s)
+		MinR,			// args = this minified subexpression nesting depth
+		MinX,			// args = this minified subexpression nesting depth
 		Next,			// args = offset to loop, infinite flag
 		Skip,			// args = offset over skipped nodes
 		SubL,			// args = minimum and maximum contained subexpression numbers
@@ -699,13 +709,14 @@ struct Node {
 };
 
 struct Regexp {
+	WConv::Encoding enc;
+	minrx_result_t err;
 	const std::vector<CSet> csets;
 	const std::vector<Node> nodes;
 	std::size_t nmin;
 	std::size_t nstk;
 	std::size_t nsub;
-	WConv::Encoding enc;
-	minrx_result_t err;
+	bool minglobal;
 };
 
 struct Compile {
@@ -722,6 +733,7 @@ struct Compile {
 	std::map<WChar, unsigned int> icmap;
 	NInt nmin = 0;
 	NInt nsub = 0;
+	bool minglobal = (flags & MINRX_REG_MINGLOBAL) != 0;
 	Compile(WConv::Encoding e, const char *bp, const char *ep, minrx_regcomp_flags_t flags): flags(flags), enc(e), wconv(e, bp, ep) { wc = wconv.nextchr(); }
 	bool num(NInt &n, WChar &wc) {
 		auto satmul = [](NInt x, NInt y) -> NInt {
@@ -744,11 +756,12 @@ struct Compile {
 		n = v;
 		return true;
 	}
-	typedef std::tuple<std::deque<Node>, std::size_t, minrx_result_t> Subexp;
+	enum MinState { Unused, Exited, Active };
+	typedef std::tuple<std::deque<Node>, std::size_t, MinState, minrx_result_t> Subexp;
 	Subexp alt(bool nested, NInt nstk) {
-		auto [lhs, lhmaxstk, err] = cat(nested, nstk);
+		auto [lhs, lhmaxstk, lminstate, err] = cat(nested, nstk);
 		if (err)
-			return {lhs, lhmaxstk, err};
+			return {lhs, lhmaxstk, lminstate, err};
 		if (wc == L'|') {
 			for (auto &l : lhs)
 				l.nstk += 1;
@@ -757,73 +770,86 @@ struct Compile {
 				wc = wconv.nextchr();
 				alts.push_back(cat(nested, nstk + 1));
 			}
-			auto [rhs, rhmaxstk, err] = alts.back();
+			auto [rhs, rhmaxstk, rminstate, err] = alts.back();
 			if (err)
-				return {rhs, rhmaxstk, err};
+				return {rhs, rhmaxstk, rminstate, err};
 			rhs.push_front({Node::Goto, {rhs.size(), rhs.size() + 1}, nstk + 1});
 			alts.pop_back();
 			while (!alts.empty()) {
-				auto [mhs, mhmaxstk, _] = alts.back();
+				auto [mhs, mhmaxstk, mminstate, _] = alts.back();
 				alts.pop_back();
 				rhs.insert(rhs.begin(), mhs.begin(), mhs.end());
 				rhmaxstk = std::max(mhmaxstk, rhmaxstk);
+				rminstate = std::max(mminstate, rminstate);
 				rhs.push_front({Node::Goto, {mhs.size(), rhs.size() + 1}, nstk + 1});
 			}
 			lhs.push_front({Node::Fork, { lhs.size(), 0 }, nstk + 1});
 			lhs.insert(lhs.end(), rhs.begin(), rhs.end());
 			lhmaxstk = std::max(lhmaxstk, rhmaxstk);
+			lminstate = std::max(lminstate, rminstate);
 			lhs.push_back({Node::Join, {lhs.size() - 1, 0}, nstk + 1});
 		}
-		return {lhs, lhmaxstk, MINRX_REG_SUCCESS};
+		return {lhs, lhmaxstk, lminstate, MINRX_REG_SUCCESS};
 	}
 	Subexp cat(bool nested, NInt nstk) {
-		auto [lhs, lhmaxstk, err] = rep(nested, nstk);
+		auto [lhs, lhmaxstk, lminstate, err] = rep(nested, nstk);
 		if (err)
-			return {lhs, lhmaxstk, err};
+			return {lhs, lhmaxstk, lminstate, err};
 		while (wc != WConv::End && wc != L'|' && (wc != L')' || !nested)) {
-			auto [rhs, rhmaxstk, err] = rep(nested, nstk);
+			auto [rhs, rhmaxstk, rminstate, err] = rep(nested, nstk);
 			if (err)
-				return {rhs, rhmaxstk, err};
+				return {rhs, rhmaxstk, rminstate, err};
 			lhs.insert(lhs.end(), rhs.begin(), rhs.end());
 			lhmaxstk = std::max(lhmaxstk, rhmaxstk);
+			lminstate = rminstate ? rminstate : lminstate;
 		}
-		return {lhs, lhmaxstk, MINRX_REG_SUCCESS};
+		return {lhs, lhmaxstk, lminstate, MINRX_REG_SUCCESS};
 	}
-	Subexp minify(const Subexp &lh, NInt nstk) {
-		auto [nodes, maxstk, err] = lh;
-		NInt maxdepth = 0;
-		for (auto &n : nodes) {
+	Subexp minimize(const Subexp &lh, NInt nstk) {
+		auto [nodes, maxstk, minstate, err] = lh;
+		for (auto &n : nodes)
 			n.nstk += 1;
-			if (n.type == Node::MinL)
-				++n.args[0], maxdepth = std::max(maxdepth, n.args[0]);
-			if (n.type == Node::MinR)
-				++n.args[0];
-		}
-		nmin = std::max(maxdepth + 1, nmin);
-		nodes.push_front({Node::MinL, {0, 0},  nstk + 1});
-		nodes.push_back({Node::MinR, {0, maxdepth > 0}, nstk});
-		return {nodes, maxstk + 1, err};
+		nodes.push_front({Node::MinL, {0, 0}, nstk + 1});
+		nodes.push_back({Node::MinR, {0, 0}, nstk});
+		nmin = std::max(nmin, (std::size_t) 1);
+		return {nodes, maxstk + 1, Active, err};
+	}
+	void minraise(Subexp &lh) {
+		auto &[nodes, maxstk, minstate, err] = lh;
+		NInt maxlevel = 0;
+		for (auto &n : nodes)
+			switch (n.type) {
+			case Node::MinB:
+			case Node::MinL:
+			case Node::MinR:
+			case Node::MinX:
+				maxlevel = std::max(maxlevel, ++n.args[0]);
+				break;
+			default:
+				;
+			}
+		nmin = std::max(nmin, maxlevel + 1);
 	}
 	Subexp mkrep(const Subexp &lh, bool optional, bool infinite, NInt nstk) {
-		auto [lhs, lhmaxstk, _] = lh;
+		auto [lhs, lhmaxstk, lminstate, _] = lh;
 		if (optional && !infinite) {
 			for (auto &l : lhs) l.nstk += 2;
 			auto lhsize = lhs.size();
 			lhs.push_front({Node::Skip, {lhsize, 0}, nstk + 2});
-			return {lhs, lhmaxstk + 2, MINRX_REG_SUCCESS};
+			return {lhs, lhmaxstk + 2, lminstate, MINRX_REG_SUCCESS};
 		} else {
 			for (auto &l : lhs) l.nstk += 3;
 			auto lhsize = lhs.size();
 			lhs.push_front({Node::Loop, {lhsize, (NInt) optional}, nstk + 3});
 			lhs.push_back({Node::Next, {lhsize, (NInt) infinite}, nstk});
-			return {lhs, lhmaxstk + 3, MINRX_REG_SUCCESS};
+			return {lhs, lhmaxstk + 3, lminstate, MINRX_REG_SUCCESS};
 		}
 	}
 	Subexp mkrep(const Subexp &lh, NInt m, NInt n, NInt nstk) {
 		if ((m != (NInt) -1 && m > RE_DUP_MAX) || (n != (NInt) -1 && n > RE_DUP_MAX) || m > n)
-			return {{}, 0, MINRX_REG_BADBR};
+			return {{}, 0, Unused, MINRX_REG_BADBR};
 		if (n == 0)
-			return {{}, 0, MINRX_REG_SUCCESS};
+			return {{}, 0, Unused, MINRX_REG_SUCCESS};
 		if (m == 0 && n == 1)
 			return mkrep(lh, true, false, nstk);
 		if (m == 0 && n == (NInt) -1)
@@ -832,8 +858,8 @@ struct Compile {
 			return lh;
 		if (m == 1 && n == (NInt) -1)
 			return mkrep(lh, false, true, nstk);
-		auto [lhs, lhmaxstk, _] = lh;
-		auto [rhs, rhmaxstk, __] = lh;
+		auto [lhs, lhmaxstk, lminstate, _] = lh;
+		auto [rhs, rhmaxstk, rminstate,__] = lh;
 		NInt k;
 		for (k = 1; k < m; ++k)
 			lhs.insert(lhs.end(), rhs.begin(), rhs.end());
@@ -858,14 +884,15 @@ struct Compile {
 			lhs.insert(lhs.end(), rhs.begin(), rhs.end());
 		}
 		if (m == 0)
-			return mkrep({lhs, rhmaxstk, MINRX_REG_SUCCESS}, true, false, nstk);
+			return mkrep({lhs, rhmaxstk, rminstate, MINRX_REG_SUCCESS}, true, false, nstk);
 		else
-			return {lhs, rhmaxstk, MINRX_REG_SUCCESS};
+			return {lhs, rhmaxstk, rminstate, MINRX_REG_SUCCESS};
 	}
 	Subexp rep(bool nested, NInt nstk) {
 		auto lh = chr(nested, nstk);
 		if (std::get<minrx_result_t>(lh))
 			return lh;
+		auto minstate = std::get<MinState>(lh);
 		for (;;) {
 			bool infinite = false, minimal = (flags & MINRX_REG_MINIMAL) != 0, optional = false;
 			switch (wc) {
@@ -877,9 +904,27 @@ struct Compile {
 				goto common;
 			case L'+':
 				infinite = true;
-			common:	if ((wc = wconv.nextchr()) == L'?')
+			common:	if ((flags & MINRX_REG_MINDISABLE) == 0 && (wc = wconv.nextchr()) == L'?')
 					minimal ^= true, wc = wconv.nextchr();
-				lh = mkrep(minimal ? minify(lh, nstk) : lh, optional, infinite, nstk);
+				if ((flags & MINRX_REG_RPTMINSLOW) == 0 && (minstate == Active || (minglobal && minstate == Exited))) {
+					std::get<0>(lh).push_back({Node::MinX, {0, 0}, nstk});
+					std::get<MinState>(lh) = minstate = Exited;
+				}
+				if (minstate != Unused && (minglobal || minimal)) {
+					minraise(lh);
+					if (!minglobal)
+						std::get<MinState>(lh) = minstate = Unused;
+				}
+				lh = mkrep(minimal ? minimize(lh, nstk) : lh, optional, infinite, nstk);
+			comout:	if (minimal)
+					std::get<0>(lh).push_front({Node::MinB, {0, 0}, nstk});
+				if ((flags & MINRX_REG_RPTMINSLOW) != 0 && (minstate == Active || (minglobal && minstate == Exited))) { // N.B. pre-mkrep minstate
+					NInt raised = minglobal | minimal;
+					std::get<0>(lh).push_back({Node::MinX, {raised, 0}, nstk});
+					if (!minimal)
+						std::get<MinState>(lh) = Exited;
+				}
+				minstate = std::get<MinState>(lh);
 				continue;
 			case L'{':
 				if ((flags & MINRX_REG_BRACE_COMPAT) == 0
@@ -888,37 +933,64 @@ struct Compile {
 				{
 					wc = wconv.nextchr();
 					if (wc == WConv::End)
-						return {{}, 0, MINRX_REG_EBRACE};
+						return {{}, 0, Unused, MINRX_REG_EBRACE};
 					NInt m, n;
 					if (!num(m, wc))
-						return {{}, 0, MINRX_REG_BADBR};
+						return {{}, 0, Unused, MINRX_REG_BADBR};
 					if (wc == L'}') {
-						if ((wc = wconv.nextchr()) == L'?')
+						if ((flags & MINRX_REG_MINDISABLE) == 0 && (wc = wconv.nextchr()) == L'?')
 							minimal ^= true, wc = wconv.nextchr();
-						lh = mkrep(minimal ? minify(lh, nstk) : lh, m, m, nstk);
-						continue;
+						if ((flags & MINRX_REG_RPTMINSLOW) == 0 && (minstate == Active || (minglobal && minstate == Exited))) {
+							std::get<0>(lh).push_back({Node::MinX, {0, 0}, nstk});
+							std::get<MinState>(lh) = minstate = Exited;
+						}
+						if (minstate != Unused && (minglobal || minimal)) {
+							minraise(lh);
+							if (!minglobal)
+								std::get<MinState>(lh) = minstate = Unused;
+						}
+						lh = mkrep(minimal ? minimize(lh, nstk) : lh, m, m, nstk);
+						goto comout;
 					}
 					if (wc == WConv::End)
-						return {{}, 0, MINRX_REG_EBRACE};
+						return {{}, 0, Unused, MINRX_REG_EBRACE};
 					if (wc != L',')
-						return {{}, 0, MINRX_REG_BADBR};
+						return {{}, 0, Unused, MINRX_REG_BADBR};
 					wc = wconv.nextchr();
 					if (wc == L'}') {
-						if ((wc = wconv.nextchr()) == L'?')
+						if ((flags & MINRX_REG_MINDISABLE) == 0 && (wc = wconv.nextchr()) == L'?')
 							minimal ^= true, wc = wconv.nextchr();
-						lh = mkrep(minimal ? minify(lh, nstk) : lh, m, -1, nstk);
-						continue;
+						if ((flags & MINRX_REG_RPTMINSLOW) == 0 && (minstate == Active || (minglobal && minstate == Exited))) {
+							std::get<0>(lh).push_back({Node::MinX, {0, 0}, nstk});
+							std::get<MinState>(lh) = minstate = Exited;
+						}
+						if (minstate != Unused && (minglobal || minimal)) {
+							minraise(lh);
+							if (!minglobal)
+								std::get<MinState>(lh) = minstate = Unused;
+						}
+						lh = mkrep(minimal ? minimize(lh, nstk) : lh, m, -1, nstk);
+						goto comout;
 					}
 					if (!num(n, wc))
-						return {{}, 0, MINRX_REG_BADBR};
+						return {{}, 0, Unused, MINRX_REG_BADBR};
 					if (wc == WConv::End)
-						return {{}, 0, MINRX_REG_EBRACE};
+						return {{}, 0, Unused, MINRX_REG_EBRACE};
 					if (wc != L'}')
-						return {{}, 0, MINRX_REG_BADBR};
-					if ((wc = wconv.nextchr()) == L'?')
+						return {{}, 0, Unused, MINRX_REG_BADBR};
+					if ((flags & MINRX_REG_MINDISABLE) == 0 && (wc = wconv.nextchr()) == L'?')
 						minimal ^= true, wc = wconv.nextchr();
-					lh = mkrep(minimal ? minify(lh, nstk) : lh, m, n, nstk);
-					continue;
+					if ((flags & MINRX_REG_RPTMINSLOW) == 0 && (minstate == Active || (minglobal && minstate == Exited))) {
+						std::get<0>(lh).push_back({Node::MinX, {0, 0}, nstk});
+						std::get<MinState>(lh) = minstate = Exited;
+					}
+					if (minstate != Unused && (minglobal || minimal)) {
+						minraise(lh);
+						if (!minglobal)
+							std::get<MinState>(lh) = minstate = Unused;
+					}
+					lh = mkrep(minimal ? minimize(lh, nstk) : lh, m, n, nstk);
+					goto comout;
 				}
 				// fall through
 			default:
@@ -929,6 +1001,7 @@ struct Compile {
 	Subexp chr(bool nested, NInt nstk) {
 		std::deque<Node> lhs;
 		std::size_t lhmaxstk;
+		MinState lminstate = Unused;
 		switch (wc) {
 		default:
 		normal:
@@ -963,12 +1036,12 @@ struct Compile {
 		case L'*':
 		case L'+':
 		case L'?':
-			return {{}, 0, MINRX_REG_BADRPT};
+			return {{}, 0, Unused, MINRX_REG_BADRPT};
 		case L'[':
 			lhmaxstk = nstk;
 			lhs.push_back({Node::CSet, {csets.size(), 0}, nstk});
 			if (auto err = csets.emplace_back(enc).parse(flags, enc, wconv))
-				return {{}, 0, err};
+				return {{}, 0, Unused, err};
 			wc = wconv.nextchr();
 			break;
 		case L'.':
@@ -1068,7 +1141,7 @@ struct Compile {
 				lhs.push_back({Node::CSet, {*esc_W, 0}, nstk});
 				break;
 			case WConv::End:
-				return {{}, 0, MINRX_REG_EESCAPE};
+				return {{}, 0, Unused, MINRX_REG_EESCAPE};
 			default:
 				goto normal;
 			}
@@ -1079,11 +1152,11 @@ struct Compile {
 				NInt n = ++nsub;
 				wc = wconv.nextchr();
 				minrx_result_t err;
-				std::tie(lhs, lhmaxstk, err) = alt(true, nstk + 1);
+				std::tie(lhs, lhmaxstk, lminstate, err) = alt(true, nstk + 1);
 				if (err)
-					return {lhs, lhmaxstk, err};
+					return {lhs, lhmaxstk, lminstate, err};
 				if (wc != L')')
-					return {{}, 0, MINRX_REG_EPAREN};
+					return {{}, 0, Unused, MINRX_REG_EPAREN};
 				lhs.push_front({Node::SubL, {n, nsub}, nstk + 1});
 				lhs.push_back({Node::SubR, {n, nsub}, nstk});
 				wc = wconv.nextchr();
@@ -1098,10 +1171,14 @@ struct Compile {
 			lhmaxstk = nstk;
 			break;
 		}
-		return {lhs, lhmaxstk, MINRX_REG_SUCCESS};
+		return {lhs, lhmaxstk, lminstate, MINRX_REG_SUCCESS};
 	}
 	Regexp *compile() {
-		auto [lhs, nstk, err] = alt(false, 0);
+		if (((flags & MINRX_REG_MINDISABLE) != 0 && (flags & (MINRX_REG_MINIMAL | MINRX_REG_MINGLOBAL | MINRX_REG_MINSCOPED | MINRX_REG_RPTMINFAST | MINRX_REG_RPTMINSLOW)) != 0)
+		    || (flags & (MINRX_REG_MINGLOBAL | MINRX_REG_MINSCOPED)) == (MINRX_REG_MINGLOBAL | MINRX_REG_MINSCOPED)
+		    || (flags & (MINRX_REG_RPTMINFAST | MINRX_REG_RPTMINSLOW)) == (MINRX_REG_RPTMINFAST | MINRX_REG_RPTMINSLOW))
+			return new Regexp { enc, MINRX_REG_BADPAT, {}, {}, 0, 0, 1, false };
+		auto [lhs, nstk, minstate, err] = alt(false, 0);
 		if (err) {
 			csets.clear();
 			lhs.clear();
@@ -1111,12 +1188,14 @@ struct Compile {
 		} else {
 			lhs.push_back({Node::Exit, {0, 0}, 0});
 		}
-		for (auto &l : lhs) l.nstk += nmin;
-		return new Regexp{ std::move(csets), {lhs.begin(), lhs.end()}, nmin, nstk, nsub + 1, enc, err };
+		if (nmin > 0)
+			for (auto &l : lhs) l.nstk += nmin;
+		return new Regexp { enc, err, std::move(csets), {lhs.begin(), lhs.end()}, nmin, nstk, nsub + 1, minglobal };
 	}
 };
 
 struct Execute {
+	constexpr static std::size_t SizeBits = std::numeric_limits<std::size_t>::digits;
 	typedef COWVec<std::size_t, (std::size_t) -1> Vec;
 	struct NState {
 		std::size_t gen = 0;
@@ -1125,23 +1204,30 @@ struct Execute {
 		NState() {}
 		NState(Vec::Allocator &allocator): substack(allocator) {}
 		template <typename... XArgs>
-		bool cmpgt(const NState &ns, std::size_t gen, std::size_t nstk, XArgs... xargs) const {
+		auto cmp(const NState &ns, std::size_t gen, std::size_t nstk, XArgs... xargs) const {
 			if (gen != ns.gen)
-				return gen > ns.gen;
+				return gen <=> ns.gen;
 			if (boff != ns.boff)
-				return boff < ns.boff;
-			return substack.cmpgt(ns.substack, nstk, xargs...);
+				return ns.boff <=> boff;
+			if (auto x = substack.cmp(ns.substack, nstk, xargs...); x != 0)
+				return x;
+			return 0 <=> 0;
 		}
 	};
 	const Regexp &r;
 	const minrx_regexec_flags_t flags;
+	const bool minglobal = r.minglobal;
 	const std::size_t suboff = r.nmin + r.nstk;
+	const std::size_t minvcnt = (r.nmin + SizeBits - 1) / SizeBits;
+	const std::size_t minvoff = suboff + 2 * r.nsub;
+	const std::size_t nestoff = minvoff + minvcnt;
 	std::size_t gen = 0;
 	std::size_t off = 0;
 	WConv wconv;
 	WChar wcprev = WConv::End;
-	Vec::Allocator allocator { suboff + 2 * r.nsub };
+	Vec::Allocator allocator { nestoff + (minglobal ? r.nmin : 0) };
 	std::optional<Vec> best;
+	NInt bestmincount = 0; // note mincounts are negated so this means +infinity
 	QSet<NInt> epsq { r.nodes.size() };
 	QVec<NInt, NState> epsv { r.nodes.size() };
 	const Node *nodes = r.nodes.data();
@@ -1155,7 +1241,7 @@ struct Execute {
 				auto [newly, newns] = ncsv.insert(k, ns);
 				if (newly)
 					new (&newns) NState(ns);
-				else if (ns.cmpgt(newns, gen, nstk, xargs...))
+				else if (auto x = ns.cmp(newns, gen, nstk, xargs...); x > 0 || (x == 0 && minvcnt && ns.substack.cmp(minvoff, minvcnt, newns.substack) > 0))
 					newns = ns;
 				else
 					return;
@@ -1169,7 +1255,7 @@ struct Execute {
 			auto [newly, newns] = epsv.insert(k, ns);
 			if (newly)
 				new (&newns) NState(ns);
-			else if (ns.cmpgt(newns, gen, nstk, xargs...))
+			else if (auto x = ns.cmp(newns, gen, nstk, xargs...); x > 0 || (x == 0 && minvcnt && ns.substack.cmp(minvoff, minvcnt, newns.substack) > 0))
 				newns = ns;
 			else
 				return;
@@ -1195,14 +1281,17 @@ struct Execute {
 			switch (n.type) {
 			case Node::Exit:
 				{
-					auto b = ns.boff, e = off;
+					auto b = ns.boff, e = off, mincount = r.nmin ? ns.substack.get(0) : (NInt) -1;
+					bool minvalid = r.nmin ? ns.substack.get(minvoff) < ((std::size_t) 1 << (SizeBits - 1)) : false;
 					if (!best.has_value()
 					    || b < best->get(suboff + 0)
-					    || (b == best->get(suboff + 0) && e >= best->get(suboff + 1) && (r.nmin == 0 || ns.substack.get(0) >= best->get(0))))
+					    || (b == best->get(suboff + 0) && e > best->get(suboff + 1) && (!minvalid || mincount >= bestmincount)))
 					{
 						best = ns.substack;
 						best->put(suboff + 0, b);
 						best->put(suboff + 1, e);
+						if (minvalid)
+							bestmincount = std::max(bestmincount, mincount);
 					}
 				}
 				break;
@@ -1226,21 +1315,52 @@ struct Execute {
 				if (n.args[1])
 					add(ncsv, k + 1 + n.args[0], nstk, ns, wcnext, (NInt) off, (NInt) 0, (NInt) off);
 				break;
-			case Node::MinL:
+			case Node::MinB:
 				{
+					std::size_t w = n.args[0] / SizeBits;
+					std::size_t b = (std::size_t) 1 << (SizeBits - 1 - n.args[0] % SizeBits);
 					NState nscopy = ns;
-					nscopy.substack.put(nstk - 1, off);
+					if (minglobal)
+						b |= -b;
+					auto x = nscopy.substack.get(minvoff + w);
+					do {
+						if ((x & b) != 0)
+							nscopy.substack.put(minvoff + w, x & ~b);
+						b = -1;
+					} while (minglobal && w-- > 0);
 					add(ncsv, k + 1, nstk, nscopy, wcnext);
 				}
 				break;
+			case Node::MinL:
+				add(ncsv, k + 1, nstk, ns, wcnext, off);
+				break;
 			case Node::MinR:
 				{
-					std::size_t oldlen = (std::size_t) -1 - ns.substack.get(n.args[0]);
-					std::size_t newlen = (std::size_t) -1 - (oldlen + (off - ns.substack.get(nstk)));
 					NState nscopy = ns;
-					nscopy.substack.put(n.args[0], newlen);
-					if (n.args[1])
-						nscopy.substack.put(n.args[0] + 1, -1);
+					auto mininc = off - nscopy.substack.get(n.nstk);
+					std::size_t oldlen = (std::size_t) -1 - nscopy.substack.get(n.args[0]);
+					if (minglobal) {
+						mininc -= nscopy.substack.get(nestoff + n.args[0]);
+						nscopy.substack.put(nestoff + n.args[0], 0);
+						nscopy.substack.put(n.args[0], (std::size_t) -1 - (oldlen + mininc));
+						for (auto i = n.args[0]; i-- > 0; ) {
+							oldlen = (std::size_t) -1 - nscopy.substack.get(i);
+							nscopy.substack.put(i, -1 - (oldlen + mininc));
+							nscopy.substack.put(nestoff + i, nscopy.substack.get(nestoff + i) + mininc);
+						}
+					} else {
+						nscopy.substack.put(n.args[0], (std::size_t) -1 - (oldlen + mininc));
+					}
+					add(ncsv, k + 1, nstk, nscopy, wcnext);
+				}
+				break;
+			case Node::MinX:
+				{
+					NState nscopy = ns;
+					nscopy.substack.put(n.args[0], -1);
+					std::size_t w = n.args[0] / SizeBits;
+					std::size_t b = (std::size_t) 1 << (SizeBits - 1 - n.args[0] % SizeBits);
+					nscopy.substack.put(minvoff + w, ns.substack.get(minvoff + w) | b);
 					add(ncsv, k + 1, nstk, nscopy, wcnext);
 				}
 				break;
@@ -1326,6 +1446,9 @@ struct Execute {
 				wcprev = wcnext, off = wconv.off(), wcnext = wconv.nextchr();
 		NState nsinit(allocator);
 		nsinit.boff = off;
+		if (minglobal)
+			for (std::size_t i = 0; i < r.nmin; ++i)
+				nsinit.substack.put(nestoff + i, 0);
 		add(mcsvs[0], 0, 0, nsinit, wcnext);
 		if (!epsq.empty())
 			epsclosure(mcsvs[0], wcnext);

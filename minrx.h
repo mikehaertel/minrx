@@ -50,7 +50,12 @@ typedef enum {				/* Flags for minrx_reg*comp() */
 	MINRX_REG_EXTENSIONS_BSD = 128,	/* MinRX extension: enable BSD extensions \< and \> */
 	MINRX_REG_EXTENSIONS_GNU = 256,	/* MinRX extension: enable GNU extensions \b \B \s \S \w \W */
 	MINRX_REG_NATIVE1B = 512,	/* MinRX extension: use native encoding for 8-bit character sets (MB_CUR_LEN == 1) */
-	MINRX_REG_DEBUG_COMP = 1024,	/* MinRX extension: get debug prints during compilation phase */
+	MINRX_REG_MINDISABLE = 1024,	/* MinRX extension: disable POSIX 2024 minimal repetitions */
+	MINRX_REG_MINGLOBAL = 2048,	/* MinRX extension: nexted minimization scope extends to top level / end of regexp */
+	MINRX_REG_MINSCOPED = 4096,	/* MinRX extension: nested minimization scope extends only up to next enclosing repetition (default) */
+	MINRX_REG_RPTMINFAST = 8192,	/* MinRX extension: repetitions containing minimized repetitions minimize number of minimized characters per outer repetition */
+	MINRX_REG_RPTMINSLOW = 16384,	/* MinRX extension: repetitions containing minimized repetitions minimize total minimized characters across all outer repetitions */
+	MINRX_REG_DEBUG_COMP = 32768,	/* MinRX extension: get debug prints during compilation phase */
 } minrx_regcomp_flags_t;
 
 typedef enum {				/* Flags for minrx_reg*exec() */
