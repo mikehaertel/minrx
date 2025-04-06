@@ -45,6 +45,7 @@
 #include <string>
 #include <tuple>
 #include <vector>
+#include <langinfo.h>
 #ifdef CHARSET
 #include <memory>
 #include "charset.h"
@@ -1526,14 +1527,9 @@ minrx_regncomp(minrx_regex_t *rx, std::size_t ns, const char *s, int flags)
 {
 	auto enc = MinRX::WConv::Encoding::MBtoWC;
 	auto loc = std::setlocale(LC_CTYPE, nullptr);
-	if ((loc != nullptr && loc[0] == 'C' && loc[1] == '\0') || ((flags & MINRX_REG_NATIVE1B) != 0 && MB_CUR_MAX == 1))
+	if ((std::strcmp(loc, "C") == 0 || (flags & MINRX_REG_NATIVE1B) != 0) && MB_CUR_MAX == 1)
 		enc = MinRX::WConv::Encoding::Byte;
-	else if (auto utf = std::strchr(loc ? loc : "", '.');
-		 utf != nullptr && (utf[1] == 'U' || utf[1] == 'u')
-				&& (utf[2] == 'T' || utf[2] == 't')
-				&& (utf[3] == 'F' || utf[3] == 'f')
-				&& (   (utf[4] == '8' && utf[5] == '\0')
-				    || (utf[4] == '-' && utf[5] == '8' && utf[6] == '\0')))
+	else if (std::strcmp(nl_langinfo(CODESET), "UTF-8") == 0)
 		enc = MinRX::WConv::Encoding::UTF8;
 	auto r = MinRX::Compile(enc, s, s + ns, (minrx_regcomp_flags_t) flags).compile();
 	rx->re_regexp = r;
