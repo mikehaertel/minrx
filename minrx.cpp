@@ -293,18 +293,15 @@ struct QVec {
 
 typedef int32_t WChar;			// because wchar_t may not be 32 bits
 constexpr int32_t WCharMax = 0x10FFFF;	// maximum code point: valid for Unicode and (FIXME!) blithely assumed for non-Unicode
-class WConv final {
-public:
+struct WConv final {
 	enum { End = -1 };
 	enum class Encoding { Byte, MBtoWC, UTF8 };
-//private:
 	WChar (WConv::*const nextfn)();
 	const char *const bp;
 	const char *const ep;
 	const char *cp;
 	std::mbstate_t mbs;
 	static WChar (WConv::*const nextfns[])();
-public:
 	WConv(const WConv &) = default;
 	WConv(Encoding e, const char *bp, const char *ep)
 	: nextfn(nextfns[(int) e]), bp(bp), ep(ep), cp(bp) {
