@@ -63,6 +63,7 @@ typedef enum {				/* Flags for minrx_reg*exec() */
 	MINRX_REG_FIRSTSUB = 4,		/* MinRX extension: repeated subexpressions capture their first occurrence (rather than last) */
 	MINRX_REG_NOSUBRESET = 8,	/* MinRX extension: repeated subexpressions don't clear their contained subexpressions */
 	MINRX_REG_RESUME = 16,		/* MinRX extension: resume search from rm[0].rm_eo */
+	MINRX_REG_NOFIRSTBYTES = 32	/* MinRX extension: disable rapid skip-ahead over impossible first bytes (probably only of interest to MinRX developers) */
 } minrx_regexec_flags_t;
 
 typedef enum {				/* Return values from minrx_reg*comp() and minrx_reg*exec() */
