@@ -1568,7 +1568,7 @@ struct Execute {
 			while (wcnext != WConv::End && (std::ptrdiff_t) off < rm[0].rm_eo)
 				wcprev = wcnext, off = wconv.off(), wcnext = wconv.nextchr();
 		NState nsinit(allocator);
-		if (r.firstbytes.has_value() && !r.firstcset->test(wcnext)) {
+		if ((flags & MINRX_REG_NOFIRSTBYTES) == 0 && r.firstbytes.has_value() && !r.firstcset->test(wcnext)) {
 		zoom:
 			auto cp = wconv.cp, ep = wconv.ep;
 			if (r.firstunique.has_value()) {
@@ -1620,7 +1620,7 @@ struct Execute {
 			if (mcsvs[1].empty()) {
 				if (best.has_value())
 					break;
-				if (r.firstbytes.has_value())
+				if ((flags & MINRX_REG_NOFIRSTBYTES) == 0 && r.firstbytes.has_value())
 					goto zoom;
 			}
 			if (wcnext == WConv::End)
@@ -1640,7 +1640,7 @@ struct Execute {
 			if (mcsvs[0].empty()) {
 				if (best.has_value())
 					break;
-				if (r.firstbytes.has_value())
+				if ((flags & MINRX_REG_NOFIRSTBYTES) == 0 && r.firstbytes.has_value())
 					goto zoom;
 			}
 		}
