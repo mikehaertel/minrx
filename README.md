@@ -70,8 +70,8 @@ with just two caveats that I'm aware of:
   no portable POSIX API for looking up the locale information that
   would be needed to implement this syntax.
 
-* The `[= =]` syntax inside bracket expressions for "collating element
-  equivalence classes" uses a semi-portable but horrendously slow and
+* The `[= =]` syntax inside bracket expressions for "equivalence classes"
+  uses a semi-portable but horrendously slow and
   non-standard-conforming algorithm for finding equivalent characters.
   Each `[= =]` in a pattern likely requires several milliseconds to
   compile on a modern CPU.  Again, there is no portable POSIX API that
@@ -120,10 +120,9 @@ At some point I will switch focus to performance and portability.
 
 Currently planned work:
 
-* "First character" optimization to speed up initial search.
-
 * Improve support for POSIX bracket expression collating elements
-  and implement POSIX bracket expression equivalence classes.
+  and, if possible, implement POSIX bracket expression equivalence classes
+  in a better way.
 
 * Possibly a caching-DFA-like optimization: The MinRX SNFA automaton,
   with its stack of arbitrary integers, does not in general correspond
