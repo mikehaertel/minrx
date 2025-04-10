@@ -45,7 +45,7 @@
 
 #include "minrx.h"
 
-#define VERSION		"0.3"
+#define VERSION		"0.4"
 #define COPYRIGHT_YEAR	2025
 
 /* The name the program was invoked under, for error messages */
@@ -411,7 +411,7 @@ version(void)
 {
 	fprintf(stderr, "rxgrep version %s.\n", VERSION);
 	fprintf(stderr, "Copyright (C) 2024-%d, Arnold David Robbins\n", COPYRIGHT_YEAR);
-	fprintf(stderr, "This program is Free Software, published under the GNU GPL Version 3.\n");
+	fprintf(stderr, "This program is Free Software, published under the two-clause BSD license.\n");
 
 	exit(EXIT_SUCCESS);
 }
