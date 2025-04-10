@@ -411,7 +411,7 @@ version(void)
 {
 	fprintf(stderr, "rxgrep version %s.\n", VERSION);
 	fprintf(stderr, "Copyright (C) 2024-%d, Arnold David Robbins\n", COPYRIGHT_YEAR);
-	fprintf(stderr, "This program is Free Software, published under the BSD two-clause license.\n");
+	fprintf(stderr, "This program is Free Software, published under the two-clause BSD license.\n");
 
 	exit(EXIT_SUCCESS);
 }
