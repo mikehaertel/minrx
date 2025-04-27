@@ -74,11 +74,7 @@ main(int argc, char *argv[])
 	rm[0].rm_eo = 0;
 	while (minrx_regexec(&rx, argv[2], 1000, rm, eflags) == 0) {
 		if (rm[0].rm_eo != lasteo) {
-			int j;
-			for (j = rx.re_nsub; j > 0; --j)
-				if (rm[j].rm_so != -1)
-					break;
-			for (int i = 0; i <= j; ++i)
+			for (size_t i = 0; i <= rx.re_nsub; ++i)
 				if (rm[i].rm_so != -1)
 					printf("(%d,%d)", (int) rm[i].rm_so, (int) rm[i].rm_eo);
 				else
