@@ -26,18 +26,19 @@
 // SUCH DAMAGE.
 //
 
-#include <algorithm>
+// ANSI C
+#include <ctype.h>
+#include <limits.h>
+#include <locale.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+#include <wchar.h>
+#include <wctype.h>
+
+// C++
 #include <array>
-#include <cctype>
-#include <climits>
-#include <clocale>
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
-#include <cwchar>
-#include <cwctype>
 #include <deque>
-#include <initializer_list>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -46,18 +47,9 @@
 #include <string>
 #include <tuple>
 #include <vector>
-#include <langinfo.h>
-#ifdef CHARSET
-#include <memory>
-#include "charset.h"
-#endif
-#include "minrx.h"
 
-#ifdef __GNUC__
-#define INLINE __attribute__((__always_inline__)) inline
-#else
-#define INLINE inline
-#endif
+// POSIX
+#include <langinfo.h>
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -72,19 +64,41 @@
 
 #define N_(msgid) msgid
 
-namespace MinRX {
+#ifdef CHARSET
+#include <memory>
+#include "charset.h"
+#endif
+#include "minrx.h"
 
-template <typename UINT> auto ctz(UINT x) { return __builtin_ctz(x); }
-template <> auto ctz(unsigned long x) { return __builtin_ctzl(x); }
-template <> auto ctz(unsigned long long x) { return __builtin_ctzll(x); }
+#ifdef __GNUC__
+#define INLINE __attribute__((__always_inline__)) inline
+#else
+#define INLINE inline
+#endif
+
+// FIXME: expand compiler support beyond clang and gcc
+#if UINT_MAX == 18446744073709551615U
+#define ctz __builtin_ctz
+#elif ULONG_MAX == 18446744073709551615U
+#define ctz __builtin_ctzl
+#elif ULLONG_MAX == 18446744073709551615U
+#define ctz __builtin_ctzll
+#else
+#error "can't figure out how to count trailing zeroes for 64-bit operands"
+#endif
+
+#define MAX(A, B) ((A) >= (B) ? (A) : (B))
+#define MIN(A, B) ((A) <= (B) ? (A) : (B))
+
+namespace MinRX {
 
 template <typename TYPE, TYPE INIT = 0>
 struct COWVec {
 	struct Storage;
 	struct Allocator {
-		std::size_t length;
+		size_t length;
 		Storage *freelist = nullptr;
-		Allocator(std::size_t length)
+		Allocator(size_t length)
 		: length(length)
 		{}
 		~Allocator() {
@@ -104,7 +118,7 @@ struct COWVec {
 				void *p = ::operator new(sizeof (Storage) + (length - 1) * sizeof (TYPE));
 				r = new (p) Storage(*this);
 			}
-			for (std::size_t i = 0; i != length; ++i)
+			for (size_t i = 0; i != length; ++i)
 				(*r)[i] = INIT;
 			return r;
 		}
@@ -118,13 +132,13 @@ struct COWVec {
 			Allocator *allocator;
 			Storage *freelink;
 		} u;
-		std::size_t refcnt;
+		size_t refcnt;
 		TYPE hack[1];
-		const TYPE &operator[](std::size_t i) const { return (&hack[0])[i]; }
-		TYPE &operator[](std::size_t i) { return (&hack[0])[i]; }
+		const TYPE &operator[](size_t i) const { return (&hack[0])[i]; }
+		TYPE &operator[](size_t i) { return (&hack[0])[i]; }
 		Storage *clone() {
 			auto s = u.allocator->alloc();
-			for (std::size_t i = 0; i != u.allocator->length; ++i)
+			for (size_t i = 0; i != u.allocator->length; ++i)
 				(*s)[i] = (*this)[i];
 			return s;
 		}
@@ -153,17 +167,17 @@ struct COWVec {
 		return *this;
 	}
 	~COWVec() { if (storage && --storage->refcnt == 0) storage->u.allocator->dealloc(storage); }
-	auto cmp(std::size_t o, std::size_t n, const COWVec &other) const {
+	auto cmp(size_t o, size_t n, const COWVec &other) const {
 		const TYPE *xv = &(*storage)[0];
 		const TYPE *yv = &(*other.storage)[0];
-		for (std::size_t i = 0; i < n; i++)
+		for (size_t i = 0; i < n; i++)
 			if (xv[o + i] != yv[o + i])
 				return xv[o + i] <=> yv[o + i];
 		return (TYPE) 0 <=> (TYPE) 0;
 	}
 	template <typename... XArgs>
-	auto cmp(const COWVec &other, std::size_t limit, XArgs... xargs) const {
-		std::size_t i;
+	auto cmp(const COWVec &other, size_t limit, XArgs... xargs) const {
+		size_t i;
 		const TYPE *xv = &(*storage)[0];
 		const TYPE *yv = &(*other.storage)[0];
 		for (i = 0; i < limit - sizeof... (XArgs); i++)
@@ -175,8 +189,8 @@ struct COWVec {
 					return x <=> yv[i - 1];
 		return (TYPE) 0 <=> (TYPE) 0;
 	}
-	const TYPE &get(std::size_t idx) const { return (*storage)[idx]; }
-	COWVec &put(std::size_t idx, TYPE val) {
+	const TYPE &get(size_t idx) const { return (*storage)[idx]; }
+	COWVec &put(size_t idx, TYPE val) {
 		if ((*storage)[idx] == val)
 			return *this;
 		if (storage->refcnt > 1) {
@@ -191,23 +205,23 @@ struct COWVec {
 
 template <typename UINT>
 struct QSet {
-	std::uint64_t *bits[10];
-	std::uint64_t bits0;
-	std::uint64_t *bitsfree = nullptr;
+	uint64_t *bits[10];
+	uint64_t bits0;
+	uint64_t *bitsfree = nullptr;
 	int depth = 0;
 	QSet(UINT limit) {
-		std::size_t s[10], t = 0;
+		size_t s[10], t = 0;
 		do
 			t += (limit = s[depth++] = (limit + 63u) / 64u);
 		while (limit > 1);
-		std::uint64_t *next = bitsfree = (std::uint64_t *) ::operator new(t * sizeof (std::uint64_t));
+		uint64_t *next = bitsfree = (uint64_t *) ::operator new(t * sizeof (uint64_t));
 		bits[0] = &bits0;
 		for (int i = 1; i < depth; ++i)
 			bits[i] = next, next += s[depth - 1 - i];
 		bits0 = 0;
 	}
 	~QSet() { if (bitsfree) ::operator delete(bitsfree); }
-	static std::uint64_t bit(UINT k) { return (std::uint64_t) 1 << (k & 0x3F); }
+	static uint64_t bit(UINT k) { return (uint64_t) 1 << (k & 0x3F); }
 	bool empty() const { return !bits0; }
 	bool contains(UINT k) const {
 		int i = 0, s = 6 * depth;
@@ -300,14 +314,14 @@ struct WConv final {
 	const char *const bp;
 	const char *const ep;
 	const char *cp;
-	std::mbstate_t mbs;
+	mbstate_t mbs;
 	static WChar (WConv::*const nextfns[])();
 	WConv(const WConv &) = default;
 	WConv(Encoding e, const char *bp, const char *ep)
 	: nextfn(nextfns[(int) e]), bp(bp), ep(ep), cp(bp) {
-		std::memset(&mbs, 0, sizeof mbs);
+		memset(&mbs, 0, sizeof mbs);
 	}
-	WConv(Encoding e, const char *bp): WConv(e, bp, bp + std::strlen(bp)) { }
+	WConv(Encoding e, const char *bp): WConv(e, bp, bp + strlen(bp)) { }
 	auto lookahead() const { return WConv(*this).nextchr(); }
 	WChar nextchr() { return (this->*nextfn)(); }
 	WChar nextbyte() { return cp != ep ? (unsigned char) *cp++ : (WChar) End; }
@@ -315,7 +329,7 @@ struct WConv final {
 		wchar_t wct = L'\0';
 		if (cp != ep) {
 			auto n = mbrtowc(&wct, cp, ep - cp, &mbs);
-			if (n == 0 || n == (std::size_t) -1 || n == (std::size_t) -2) {
+			if (n == 0 || n == (size_t) -1 || n == (size_t) -2) {
 				if (wct == L'\0')
 					wct = std::numeric_limits<WChar>::min() + (unsigned char) *cp++;
 			} else {
@@ -369,7 +383,7 @@ struct WConv final {
 			return End;
 		}
 	}
-	std::size_t off() const { return cp - bp; }
+	size_t off() const { return cp - bp; }
 	auto ptr() const { return cp; }
 	auto save() { return cp; }
 	void restore(const char *p) { cp = p; }
@@ -398,7 +412,7 @@ struct CSet {
 	static std::map<std::string, CSet> cclmemo;
 	static std::mutex cclmutex;
 	struct Range {
-		Range(WChar x, WChar y): min(std::min(x, y)), max(std::max(x, y)) {}
+		Range(WChar x, WChar y): min(MIN(x, y)), max(MAX(x, y)) {}
 		WChar min, max;
 		int operator<=>(const Range &r) const {
 			return (min > r.max) - (max < r.min);
@@ -442,11 +456,11 @@ struct CSet {
 			ranges.insert(Range(wclo, wchi));
 		} else {
 			if (x->max >= e.min)
-				wclo = std::min(wclo, x->min);
+				wclo = MIN(wclo, x->min);
 			auto z = y;
 			--z;
 			if (z->min <= e.max)
-				wchi = std::max(wchi, z->max);
+				wchi = MAX(wchi, z->max);
 			auto i = ranges.erase(x, y);
 			ranges.insert(i, Range(wclo, wchi));
 		}
@@ -482,29 +496,29 @@ struct CSet {
 		}
 		return result == CSET_SUCCESS;
 #else
-		auto wct = std::wctype(name.c_str());
+		auto wct = wctype(name.c_str());
 		if (wct) {
-			std::string key = name + ":" + std::setlocale(LC_CTYPE, NULL) + ":" + ((flags & MINRX_REG_ICASE) != 0 ? "1" : "0");
+			std::string key = name + ":" + setlocale(LC_CTYPE, NULL) + ":" + ((flags & MINRX_REG_ICASE) != 0 ? "1" : "0");
 			std::lock_guard<std::mutex> lock(cclmutex);
 			auto i = cclmemo.find(key);
 			if (i == cclmemo.end()) {
 				if (enc == WConv::Encoding::Byte)
 					for (WChar b = 0; b <= 0xFF; ++b) {
-						if (std::iswctype(std::btowc(b), wct)) {
+						if (iswctype(btowc(b), wct)) {
 							set(b);
 							if ((flags & MINRX_REG_ICASE) != 0) {
-								set(std::tolower(b));
-								set(std::toupper(b));
+								set(tolower(b));
+								set(toupper(b));
 							}
 						}
 					}
 				else
 					for (WChar wc = 0; wc <= WCharMax; ++wc) {
-						if (std::iswctype(wc, wct)) {
+						if (iswctype(wc, wct)) {
 							set(wc);
 							if ((flags & MINRX_REG_ICASE) != 0) {
-								set(std::towlower(wc));
-								set(std::towupper(wc));
+								set(towlower(wc));
+								set(towupper(wc));
 							}
 						}
 					}
@@ -560,10 +574,10 @@ struct CSet {
 					int32_t coll[2] = { wc, L'\0' };
 					charset_add_collate(charset, coll);	// FIXME: No error checking
 					if ((flags & MINRX_REG_ICASE) != 0) {
-						if (std::iswlower(wc))
-							coll[0] = std::towupper(wc);
-						else if (std::iswupper(wc))
-							coll[0] = std::towlower(wc);
+						if (iswlower(wc))
+							coll[0] = towupper(wc);
+						else if (iswupper(wc))
+							coll[0] = towlower(wc);
 						charset_add_collate(charset, coll);	// FIXME: No error checking
 					}
 #endif
@@ -592,18 +606,18 @@ struct CSet {
 #ifdef CHARSET
 					charset_add_equiv(charset, wc);	// FIXME: No error checking
 					if ((flags & MINRX_REG_ICASE) != 0) {
-						if (std::iswlower(wc))
-							charset_add_equiv(charset, std::towupper(wc));	// FIXME: no error checking
-						else if (std::iswupper(wc))
-							charset_add_equiv(charset, std::towlower(wc));	// FIXME: no error checking
+						if (iswlower(wc))
+							charset_add_equiv(charset, towupper(wc));	// FIXME: no error checking
+						else if (iswupper(wc))
+							charset_add_equiv(charset, towlower(wc));	// FIXME: no error checking
 					}
 #else
 					add_equiv(wc);
 					if ((flags & MINRX_REG_ICASE) != 0) {
-						if (std::iswlower(wc))
-							add_equiv(std::towupper(wc));
-						else if (std::iswupper(wc))
-							add_equiv(std::towlower(wc));
+						if (iswlower(wc))
+							add_equiv(towupper(wc));
+						else if (iswupper(wc))
+							add_equiv(towlower(wc));
 					}
 #endif
 					wc = wconv.nextchr();
@@ -650,8 +664,8 @@ struct CSet {
 				set(wclo, wchi);
 				if ((flags & MINRX_REG_ICASE) != 0) {
 					for (auto wc = wclo; wc <= wchi; ++wc) {
-						set(enc == WConv::Encoding::Byte ? std::tolower(wc) : std::towlower(wc));
-						set(enc == WConv::Encoding::Byte ? std::toupper(wc) : std::towupper(wc));
+						set(enc == WConv::Encoding::Byte ? tolower(wc) : towlower(wc));
+						set(enc == WConv::Encoding::Byte ? toupper(wc) : towupper(wc));
 					}
 				}
 			}
@@ -699,7 +713,7 @@ struct CSet {
 			for (const auto &r : ranges) {
 				if (r.min > 255)
 					break;
-				auto lo = r.min, hi = std::min(255, r.max);
+				auto lo = r.min, hi = MIN(255, r.max);
 				for (auto b = lo; b <= hi; b++)
 					fb[b] = true;
 			}
@@ -732,7 +746,7 @@ std::map<std::string, CSet> CSet::cclmemo;
 std::mutex CSet::cclmutex;
 #endif
 
-typedef std::size_t NInt;
+typedef size_t NInt;
 
 struct Node {
 	enum Type {
@@ -774,9 +788,9 @@ struct Regexp {
 	std::optional<const CSet> firstcset;
 	std::optional<const std::array<bool, 256>> firstbytes;
 	std::optional<char> firstunique;
-	std::size_t nmin;
-	std::size_t nstk;
-	std::size_t nsub;
+	size_t nmin;
+	size_t nstk;
+	size_t nsub;
 };
 
 struct Compile {
@@ -785,11 +799,11 @@ struct Compile {
 	WConv wconv;
 	WChar wc;
 	std::vector<CSet> csets;
-	std::optional<std::size_t> dot;
-	std::optional<std::size_t> esc_s;
-	std::optional<std::size_t> esc_S;
-	std::optional<std::size_t> esc_w;
-	std::optional<std::size_t> esc_W;
+	std::optional<size_t> dot;
+	std::optional<size_t> esc_s;
+	std::optional<size_t> esc_S;
+	std::optional<size_t> esc_w;
+	std::optional<size_t> esc_W;
 	std::map<WChar, unsigned int> icmap;
 	NInt nmin = 0;
 	NInt nsub = 0;
@@ -815,7 +829,7 @@ struct Compile {
 		n = v;
 		return true;
 	}
-	typedef std::tuple<std::deque<Node>, std::size_t, bool, minrx_result_t> Subexp;
+	typedef std::tuple<std::deque<Node>, size_t, bool, minrx_result_t> Subexp;
 	Subexp alt(bool nested, NInt nstk) {
 		auto [lhs, lhmaxstk, lhasmin, err] = cat(nested, nstk);
 		if (err)
@@ -837,13 +851,13 @@ struct Compile {
 				auto [mhs, mhmaxstk, mhasmin, _] = alts.back();
 				alts.pop_back();
 				rhs.insert(rhs.begin(), mhs.begin(), mhs.end());
-				rhmaxstk = std::max(mhmaxstk, rhmaxstk);
+				rhmaxstk = MAX(mhmaxstk, rhmaxstk);
 				rhasmin |= mhasmin;
 				rhs.push_front({Node::Goto, {mhs.size(), rhs.size() + 1}, nstk + 1});
 			}
 			lhs.push_front({Node::Fork, { lhs.size(), 0 }, nstk + 1});
 			lhs.insert(lhs.end(), rhs.begin(), rhs.end());
-			lhmaxstk = std::max(lhmaxstk, rhmaxstk);
+			lhmaxstk = MAX(lhmaxstk, rhmaxstk);
 			lhasmin |= rhasmin;
 			lhs.push_back({Node::Join, {lhs.size() - 1, 0}, nstk + 1});
 		}
@@ -858,7 +872,7 @@ struct Compile {
 			if (err)
 				return {rhs, rhmaxstk, rhasmin, err};
 			lhs.insert(lhs.end(), rhs.begin(), rhs.end());
-			lhmaxstk = std::max(lhmaxstk, rhmaxstk);
+			lhmaxstk = MAX(lhmaxstk, rhmaxstk);
 			lhasmin |= rhasmin; 
 		}
 		return {lhs, lhmaxstk, lhasmin, MINRX_REG_SUCCESS};
@@ -869,7 +883,7 @@ struct Compile {
 			n.nstk += 1;
 		nodes.push_front({Node::MinL, {0, 0}, nstk + 1});
 		nodes.push_back({Node::MinR, {0, 0}, nstk});
-		nmin = std::max(nmin, (std::size_t) 1);
+		nmin = MAX(nmin, (size_t) 1);
 		return {nodes, maxstk + 1, true, err};
 	}
 	void minraise(Subexp &lh) {
@@ -880,12 +894,12 @@ struct Compile {
 			case Node::MinB:
 			case Node::MinL:
 			case Node::MinR:
-				maxlevel = std::max(maxlevel, ++n.args[0]);
+				maxlevel = MAX(maxlevel, ++n.args[0]);
 				break;
 			default:
 				;
 			}
-		nmin = std::max(nmin, maxlevel + 1);
+		nmin = MAX(nmin, maxlevel + 1);
 	}
 	Subexp mkrep(const Subexp &lh, bool optional, bool infinite, NInt nstk) {
 		auto [lhs, lhmaxstk, lhasmin, _] = lh;
@@ -974,8 +988,8 @@ struct Compile {
 				continue;
 			case L'{':
 				if ((flags & MINRX_REG_BRACE_COMPAT) == 0
-				    || (enc == WConv::Encoding::Byte ? std::isdigit(wconv.lookahead())
-								     : std::iswdigit(wconv.lookahead())))
+				    || (enc == WConv::Encoding::Byte ? isdigit(wconv.lookahead())
+								     : iswdigit(wconv.lookahead())))
 				{
 					wc = wconv.nextchr();
 					if (wc == WConv::End)
@@ -1025,7 +1039,7 @@ struct Compile {
 	}
 	Subexp chr(bool nested, NInt nstk) {
 		std::deque<Node> lhs;
-		std::size_t lhmaxstk;
+		size_t lhmaxstk;
 		bool lhasmin = false;
 		switch (wc) {
 		default:
@@ -1034,10 +1048,10 @@ struct Compile {
 			if ((flags & MINRX_REG_ICASE) == 0) {
 				lhs.push_back({(NInt) wc, {0, 0}, nstk});
 			} else {
-				WChar wcl = enc == WConv::Encoding::Byte ? std::tolower(wc) : std::towlower(wc);
-				WChar wcu = enc == WConv::Encoding::Byte ? std::toupper(wc) : std::towupper(wc);
+				WChar wcl = enc == WConv::Encoding::Byte ? tolower(wc) : towlower(wc);
+				WChar wcu = enc == WConv::Encoding::Byte ? toupper(wc) : towupper(wc);
 				if (wc != wcl || wc != wcu) {
-					auto key = std::min(wc, std::min(wcl, wcu));
+					auto key = MIN(wc, MIN(wcl, wcu));
 					if (icmap.find(key) == icmap.end()) {
 						icmap.emplace(key, csets.size());
 						csets.emplace_back(enc);
@@ -1054,8 +1068,8 @@ struct Compile {
 			break;
 		case L'{':
 			if ((flags & MINRX_REG_BRACE_COMPAT) != 0
-			    && (enc == WConv::Encoding::Byte ? !std::isdigit(wconv.lookahead())
-							     : !std::iswdigit(wconv.lookahead())))
+			    && (enc == WConv::Encoding::Byte ? !isdigit(wconv.lookahead())
+							     : !iswdigit(wconv.lookahead())))
 				goto normal;
 			// fall through
 		case L'*':
@@ -1276,16 +1290,16 @@ struct Compile {
 };
 
 struct Execute {
-	constexpr static std::size_t SizeBits = std::numeric_limits<std::size_t>::digits;
-	typedef COWVec<std::size_t, (std::size_t) -1> Vec;
+	constexpr static size_t SizeBits = std::numeric_limits<size_t>::digits;
+	typedef COWVec<size_t, (size_t) -1> Vec;
 	struct NState {
-		std::size_t gen = 0;
-		std::size_t boff;
+		size_t gen = 0;
+		size_t boff;
 		Vec substack;
 		NState() {}
 		NState(Vec::Allocator &allocator): substack(allocator) {}
 		template <typename... XArgs>
-		auto cmp(const NState &ns, std::size_t gen, std::size_t nstk, XArgs... xargs) const {
+		auto cmp(const NState &ns, size_t gen, size_t nstk, XArgs... xargs) const {
 			if (gen != ns.gen)
 				return gen <=> ns.gen;
 			if (boff != ns.boff)
@@ -1297,12 +1311,12 @@ struct Execute {
 	};
 	const Regexp &r;
 	const minrx_regexec_flags_t flags;
-	const std::size_t suboff = r.nmin + r.nstk;
-	const std::size_t minvcnt = (r.nmin + SizeBits - 1) / SizeBits;
-	const std::size_t minvoff = suboff + 2 * r.nsub;
-	const std::size_t nestoff = minvoff + minvcnt;
-	std::size_t gen = 0;
-	std::size_t off = 0;
+	const size_t suboff = r.nmin + r.nstk;
+	const size_t minvcnt = (r.nmin + SizeBits - 1) / SizeBits;
+	const size_t minvoff = suboff + 2 * r.nsub;
+	const size_t nestoff = minvoff + minvcnt;
+	size_t gen = 0;
+	size_t off = 0;
 	WConv wconv;
 	WChar wcprev = WConv::End;
 	Vec::Allocator allocator { nestoff + r.nmin };
@@ -1349,8 +1363,8 @@ struct Execute {
 	}
 	void epsclosure(QVec<NInt, NState> &ncsv, WChar wcnext) {
 		auto nodes = this->nodes;
-		auto is_word = r.enc == WConv::Encoding::Byte ? [](WChar b) { return b == '_' || std::isalnum(b); }
-							      : [](WChar wc) { return wc == L'_' || std::iswalnum(wc); };
+		auto is_word = r.enc == WConv::Encoding::Byte ? [](WChar b) { return b == '_' || isalnum(b); }
+							      : [](WChar wc) { return wc == L'_' || iswalnum(wc); };
 		do {
 			NInt k = epsq.remove();
 			NState &ns = epsv.lookup(k);
@@ -1362,7 +1376,7 @@ struct Execute {
 			case Node::Exit:
 				{
 					auto b = ns.boff, e = off, mincount = r.nmin ? ns.substack.get(0) : (NInt) -1;
-					bool minvalid = r.nmin ? ns.substack.get(minvoff) < ((std::size_t) 1 << (SizeBits - 1)) : false;
+					bool minvalid = r.nmin ? ns.substack.get(minvoff) < ((size_t) 1 << (SizeBits - 1)) : false;
 					if (!best.has_value()
 					    || b < best->get(suboff + 0)
 					    || (b == best->get(suboff + 0) && e > best->get(suboff + 1) && (!minvalid || mincount >= bestmincount)))
@@ -1371,7 +1385,7 @@ struct Execute {
 						best->put(suboff + 0, b);
 						best->put(suboff + 1, e);
 						if (minvalid)
-							bestmincount = std::max(bestmincount, mincount);
+							bestmincount = MAX(bestmincount, mincount);
 					}
 				}
 				break;
@@ -1397,8 +1411,8 @@ struct Execute {
 				break;
 			case Node::MinB:
 				{
-					std::size_t w = n.args[0] / SizeBits;
-					std::size_t b = (std::size_t) 1 << (SizeBits - 1 - n.args[0] % SizeBits);
+					size_t w = n.args[0] / SizeBits;
+					size_t b = (size_t) 1 << (SizeBits - 1 - n.args[0] % SizeBits);
 					NState nscopy = ns;
 					b |= -b;
 					auto x = nscopy.substack.get(minvoff + w);
@@ -1417,12 +1431,12 @@ struct Execute {
 				{
 					NState nscopy = ns;
 					auto mininc = off - nscopy.substack.get(n.nstk);
-					std::size_t oldlen = (std::size_t) -1 - nscopy.substack.get(n.args[0]);
+					size_t oldlen = (size_t) -1 - nscopy.substack.get(n.args[0]);
 					mininc -= nscopy.substack.get(nestoff + n.args[0]);
 					nscopy.substack.put(nestoff + n.args[0], 0);
-					nscopy.substack.put(n.args[0], (std::size_t) -1 - (oldlen + mininc));
+					nscopy.substack.put(n.args[0], (size_t) -1 - (oldlen + mininc));
 					for (auto i = n.args[0]; i-- > 0; ) {
-						oldlen = (std::size_t) -1 - nscopy.substack.get(i);
+						oldlen = (size_t) -1 - nscopy.substack.get(i);
 						nscopy.substack.put(i, -1 - (oldlen + mininc));
 						nscopy.substack.put(nestoff + i, nscopy.substack.get(nestoff + i) + mininc);
 					}
@@ -1502,19 +1516,19 @@ struct Execute {
 			}
 		} while (!epsq.empty());
 	}
-	int execute(std::size_t nm, minrx_regmatch_t *rm) {
+	int execute(size_t nm, minrx_regmatch_t *rm) {
 		QVec<NInt, NState> mcsvs[2] { r.nodes.size(), r.nodes.size() };
 		off = wconv.off();
 		auto wcnext = wconv.nextchr();
 		if ((flags & MINRX_REG_RESUME) != 0 && rm && rm[0].rm_eo > 0)
-			while (wcnext != WConv::End && (std::ptrdiff_t) off < rm[0].rm_eo)
+			while (wcnext != WConv::End && (ptrdiff_t) off < rm[0].rm_eo)
 				wcprev = wcnext, off = wconv.off(), wcnext = wconv.nextchr();
 		NState nsinit(allocator);
 		if ((flags & MINRX_REG_NOFIRSTBYTES) == 0 && r.firstbytes.has_value() && !r.firstcset->test(wcnext)) {
 		zoom:
 			auto cp = wconv.cp, ep = wconv.ep;
 			if (r.firstunique.has_value()) {
-				cp = (const char *) std::memchr(cp, *r.firstunique, ep - cp);
+				cp = (const char *) memchr(cp, *r.firstunique, ep - cp);
 				if (cp == nullptr)
 					goto exit;
 			} else {
@@ -1538,7 +1552,7 @@ struct Execute {
 			++gen, wcprev = wcnext, off = wconv.off(), wcnext = wconv.nextchr();
 		}
 		nsinit.boff = off;
-		for (std::size_t i = 0; i < r.nmin; ++i)
+		for (size_t i = 0; i < r.nmin; ++i)
 			nsinit.substack.put(nestoff + i, 0);
 		add(mcsvs[0], 0, 0, nsinit, wcnext);
 		if (!epsq.empty())
@@ -1588,8 +1602,8 @@ struct Execute {
 	exit:
 		if (best.has_value()) {
 			if (rm) {
-				std::size_t nsub = std::min(nm, r.nsub);
-				std::size_t i;
+				size_t nsub = MIN(nm, r.nsub);
+				size_t i;
 				for (i = 0; i < nsub; ++i) {
 					rm[i].rm_so = (*best->storage)[suboff + i * 2];
 					rm[i].rm_eo = (*best->storage)[suboff + i * 2 + 1];
@@ -1600,7 +1614,7 @@ struct Execute {
 			return 0;
 		} else {
 			if (rm)
-				for (std::size_t i = 0; i < nm; ++i)
+				for (size_t i = 0; i < nm; ++i)
 					rm[i].rm_so = rm[i].rm_eo = -1;
 			return MINRX_REG_NOMATCH;
 		}
@@ -1616,19 +1630,19 @@ minrx_regcomp(minrx_regex_t *rx, const char *s, int flags)
 }
 
 int
-minrx_regexec(minrx_regex_t *rx, const char *s, std::size_t nm, minrx_regmatch_t *rm, int flags)
+minrx_regexec(minrx_regex_t *rx, const char *s, size_t nm, minrx_regmatch_t *rm, int flags)
 {
 	return minrx_regnexec(rx, strlen(s), s, nm, rm, flags);
 }
 
 int
-minrx_regncomp(minrx_regex_t *rx, std::size_t ns, const char *s, int flags)
+minrx_regncomp(minrx_regex_t *rx, size_t ns, const char *s, int flags)
 {
 	auto enc = MinRX::WConv::Encoding::MBtoWC;
-	auto loc = std::setlocale(LC_CTYPE, nullptr);
-	if ((std::strcmp(loc, "C") == 0 || (flags & MINRX_REG_NATIVE1B) != 0) && MB_CUR_MAX == 1)
+	auto loc = setlocale(LC_CTYPE, nullptr);
+	if ((strcmp(loc, "C") == 0 || (flags & MINRX_REG_NATIVE1B) != 0) && MB_CUR_MAX == 1)
 		enc = MinRX::WConv::Encoding::Byte;
-	else if (std::strcmp(nl_langinfo(CODESET), "UTF-8") == 0)
+	else if (strcmp(nl_langinfo(CODESET), "UTF-8") == 0)
 		enc = MinRX::WConv::Encoding::UTF8;
 	auto r = MinRX::Compile(enc, s, s + ns, (minrx_regcomp_flags_t) flags).compile();
 	rx->re_regexp = r;
@@ -1638,7 +1652,7 @@ minrx_regncomp(minrx_regex_t *rx, std::size_t ns, const char *s, int flags)
 }
 
 int
-minrx_regnexec(minrx_regex_t *rx, std::size_t ns, const char *s, std::size_t nm, minrx_regmatch_t *rm, int flags)
+minrx_regnexec(minrx_regex_t *rx, size_t ns, const char *s, size_t nm, minrx_regmatch_t *rm, int flags)
 {
 	MinRX::Regexp *r = reinterpret_cast<MinRX::Regexp *>(rx->re_regexp);
 	return MinRX::Execute(*r, (minrx_regexec_flags_t) flags, s, s + ns).execute(nm, rm);
