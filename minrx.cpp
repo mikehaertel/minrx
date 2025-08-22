@@ -26,7 +26,7 @@
 // SUCH DAMAGE.
 //
 
-// ANSI C
+// ISO C
 #include <ctype.h>
 #include <limits.h>
 #include <locale.h>
@@ -36,7 +36,7 @@
 #include <wchar.h>
 #include <wctype.h>
 
-// C++
+// ISO C++
 #include <array>
 #include <deque>
 #include <limits>
@@ -55,19 +55,29 @@
 #include "config.h"
 #endif /* HAVE_CONFIG_H */
 
+// GNU gettext
 #ifdef HAVE_GETTEXT_H
 #include <gettext.h>
 #define _(msgid)  gettext(msgid)
 #else /* ! HAVE_GETTEXT_H */
 #define _(msgid)  msgid
 #endif /* ! HAVE_GETTEXT_H */
-
 #define N_(msgid) msgid
 
+// Arnold Robbins' charset library
 #ifdef CHARSET
 #include <memory>
 #include "charset.h"
 #endif
+
+#ifdef GAWK
+// Work around Gawk's use of a nonstandard allocator that probably lacks
+// extern "C" declarations for its functions.
+#undef free
+#undef malloc
+#undef realloc
+#endif
+
 #include "minrx.h"
 
 #ifdef __GNUC__
@@ -92,116 +102,181 @@
 
 namespace MinRX {
 
-template <typename TYPE, TYPE INIT = 0>
-struct COWVec {
-	struct Storage;
-	struct Allocator {
-		size_t length;
-		Storage *freelist = nullptr;
-		Allocator(size_t length)
-		: length(length)
-		{}
-		~Allocator() {
-			for (Storage *s = freelist, *sfreelink = nullptr; s != nullptr; s = sfreelink) {
-				sfreelink = s->u.freelink;
-				::operator delete(s);
-			}
-		}
-		Storage *alloc() {
-			Storage *r;
-			if (freelist) {
-				r = freelist;
-				freelist = r->u.freelink;
-				r->u.allocator = this;
-				r->refcnt = 1;
-			} else {
-				void *p = ::operator new(sizeof (Storage) + (length - 1) * sizeof (TYPE));
-				r = new (p) Storage(*this);
-			}
-			for (size_t i = 0; i != length; ++i)
-				(*r)[i] = INIT;
-			return r;
-		}
-		void dealloc(Storage *s) {
-			s->u.freelink = freelist;
-			freelist = s;
-		}
-	};
-	struct Storage {
-		union {
-			Allocator *allocator;
-			Storage *freelink;
-		} u;
-		size_t refcnt;
-		TYPE hack[1];
-		const TYPE &operator[](size_t i) const { return (&hack[0])[i]; }
-		TYPE &operator[](size_t i) { return (&hack[0])[i]; }
-		Storage *clone() {
-			auto s = u.allocator->alloc();
-			for (size_t i = 0; i != u.allocator->length; ++i)
-				(*s)[i] = (*this)[i];
-			return s;
-		}
-		Storage(Allocator &a)
-		: u({&a})
-		, refcnt(1)
-		{}
-	};
-	Storage *storage;
-	COWVec(): storage(nullptr) {}
-	COWVec(Allocator &a): storage(a.alloc()) {}
-	COWVec(const COWVec &cv): storage(cv.storage) { ++storage->refcnt; }
-	COWVec(COWVec &&cv): storage(cv.storage) { cv.storage = nullptr; }
-	COWVec &operator=(const COWVec &cv) {
-		++cv.storage->refcnt;
-		if (storage && --storage->refcnt == 0)
-			storage->u.allocator->dealloc(storage);
-		storage = cv.storage;
-		return *this;
-	}
-	COWVec &operator=(COWVec &&cv) {
-		if (storage && --storage->refcnt == 0)
-			storage->u.allocator->dealloc(storage);
-		storage = cv.storage;
-		cv.storage = nullptr;
-		return *this;
-	}
-	~COWVec() { if (storage && --storage->refcnt == 0) storage->u.allocator->dealloc(storage); }
-	auto cmp(size_t o, size_t n, const COWVec &other) const {
-		const TYPE *xv = &(*storage)[0];
-		const TYPE *yv = &(*other.storage)[0];
-		for (size_t i = 0; i < n; i++)
-			if (xv[o + i] != yv[o + i])
-				return xv[o + i] <=> yv[o + i];
-		return (TYPE) 0 <=> (TYPE) 0;
-	}
-	template <typename... XArgs>
-	auto cmp(const COWVec &other, size_t limit, XArgs... xargs) const {
-		size_t i;
-		const TYPE *xv = &(*storage)[0];
-		const TYPE *yv = &(*other.storage)[0];
-		for (i = 0; i < limit - sizeof... (XArgs); i++)
-			if (xv[i] != yv[i])
-				return xv[i] <=> yv[i];
-		if constexpr (sizeof...(XArgs) > 0)
-			for (TYPE x : { xargs... })
-				if (x != yv[i++])
-					return x <=> yv[i - 1];
-		return (TYPE) 0 <=> (TYPE) 0;
-	}
-	const TYPE &get(size_t idx) const { return (*storage)[idx]; }
-	COWVec &put(size_t idx, TYPE val) {
-		if ((*storage)[idx] == val)
-			return *this;
-		if (storage->refcnt > 1) {
-			--storage->refcnt;
-			storage = storage->clone();
-			storage->refcnt = 1;
-		}
-		(*storage)[idx] = val;
-		return *this;
-	}
+typedef struct COWVec_Allocator COWVec_Allocator;
+typedef struct COWVec_Storage COWVec_Storage;
+typedef struct COWVec COWVec;
+
+struct COWVec_Allocator {
+	size_t length;
+	COWVec_Storage *freelist = nullptr;
 };
+
+struct COWVec_Storage {
+	union {
+		COWVec_Allocator *allocator;
+		COWVec_Storage *freelink;
+	} u;
+	size_t refcnt;
+	size_t hack[1];
+};
+
+struct COWVec {
+	COWVec_Storage *storage;
+};
+
+static void
+cowvec_allocator_construct(COWVec_Allocator *a, size_t length)
+{
+	a->length = length;
+	a->freelist = nullptr;
+}
+
+static void
+cowvec_allocator_destruct(COWVec_Allocator *a)
+{
+	for (COWVec_Storage *s = a->freelist, *sfreelink = nullptr; s != nullptr; s = sfreelink) {
+		sfreelink = s->u.freelink;
+		free(s);
+	}
+}
+
+static size_t
+cowvec_storage_get(const COWVec_Storage *cvs, size_t i)
+{
+	return (&cvs->hack[0])[i];
+}
+
+static const size_t *
+cowvec_storage_getref(const COWVec_Storage *cvs, size_t i)
+{
+	return &(&cvs->hack[0])[i];
+}
+
+static void
+cowvec_storage_put(COWVec_Storage *cvs, size_t i, size_t v)
+{
+	(&cvs->hack[0])[i] = v;
+}
+
+static COWVec_Storage *
+cowvec_storage_alloc(COWVec_Allocator *a)
+{
+	COWVec_Storage *r;
+	if (a->freelist) {
+		r = a->freelist;
+		a->freelist = r->u.freelink;
+		r->u.allocator = a;
+		r->refcnt = 1;
+	} else {
+		r = (COWVec_Storage *) malloc(sizeof (COWVec_Storage) + (a->length - 1) * sizeof (size_t));
+		r->u.allocator = a;
+		r->refcnt = 1;
+	}
+	for (size_t i = 0, n = a->length; i != n; ++i)
+		cowvec_storage_put(r, i, -1);
+	return r;
+}
+
+static COWVec_Storage *
+cowvec_storage_clone(COWVec_Storage *cvs)
+{
+	auto newcvs = cowvec_storage_alloc(cvs->u.allocator);
+	for (size_t i = 0, n = cvs->u.allocator->length; i != n; ++i)
+		cowvec_storage_put(newcvs, i, cowvec_storage_get(cvs, i));
+	return newcvs;
+}
+
+static void
+cowvec_storage_dealloc(COWVec_Allocator *a, COWVec_Storage *s)
+{
+	s->u.freelink = a->freelist;
+	a->freelist = s;
+}
+
+static void
+cowvec_construct(COWVec *c, COWVec_Allocator *a)
+{
+	c->storage = a ? cowvec_storage_alloc(a) : nullptr;
+}
+
+static void
+cowvec_destruct(COWVec *c)
+{
+	if (c->storage && --c->storage->refcnt == 0)
+		cowvec_storage_dealloc(c->storage->u.allocator, c->storage);
+	c->storage = nullptr;
+}
+
+static size_t
+cowvec_get(COWVec *cv, size_t idx)
+{
+	return cowvec_storage_get(cv->storage, idx);
+}
+
+static void
+cowvec_put(COWVec *cv, size_t idx, size_t val)
+{
+	if (cowvec_storage_get(cv->storage, idx) == val)
+		return;
+	if (cv->storage->refcnt > 1) {
+		--cv->storage->refcnt;
+		cv->storage = cowvec_storage_clone(cv->storage);
+		cv->storage->refcnt = 1;
+	}
+	cowvec_storage_put(cv->storage, idx, val);
+}
+
+static void
+cowvec_copy(COWVec *dst, const COWVec *src)
+{
+	++src->storage->refcnt;
+	if (dst->storage && --dst->storage->refcnt == 0)
+		cowvec_storage_dealloc(dst->storage->u.allocator, dst->storage);
+	dst->storage = src->storage;
+}
+
+static void
+cowvec_move(COWVec *dst, COWVec *src)
+{
+	if (dst->storage && --dst->storage->refcnt == 0)
+		cowvec_storage_dealloc(dst->storage->u.allocator, dst->storage);
+	dst->storage = src->storage;
+	src->storage = nullptr;
+}
+
+template <typename... XArgs>
+static auto
+cowvec_cmp(const COWVec *xcv, const COWVec *ycv, size_t limit, XArgs... xargs)
+{
+	size_t i;
+	const size_t *xv = cowvec_storage_getref(xcv->storage, 0);
+	const size_t *yv = cowvec_storage_getref(ycv->storage, 0);
+	for (i = 0; i < limit - sizeof... (XArgs); i++)
+		if (xv[i] != yv[i])
+			return xv[i] <=> yv[i];
+	if constexpr (sizeof...(XArgs) > 0)
+		for (size_t x : { xargs... })
+			if (x != yv[i++])
+				return x <=> yv[i - 1];
+	return (size_t) 0 <=> (size_t) 0;
+}
+
+static auto
+cowvec_cmp_from(size_t o, const COWVec *xcv, const COWVec *ycv, size_t n)
+{
+	const size_t *xv = cowvec_storage_getref(xcv->storage, 0);
+	const size_t *yv = cowvec_storage_getref(ycv->storage, 0);
+	for (size_t i = 0; i < n; i++)
+		if (xv[o + i] != yv[o + i])
+			return xv[o + i] <=> yv[o + i];
+	return (size_t) 0 <=> (size_t) 0;
+}
+
+static bool
+cowvec_valid(const COWVec *c)
+{
+	return c->storage != nullptr;
+}
 
 template <typename UINT>
 struct QSet {
@@ -1291,20 +1366,46 @@ struct Compile {
 
 struct Execute {
 	constexpr static size_t SizeBits = std::numeric_limits<size_t>::digits;
-	typedef COWVec<size_t, (size_t) -1> Vec;
 	struct NState {
 		size_t gen = 0;
 		size_t boff;
-		Vec substack;
-		NState() {}
-		NState(Vec::Allocator &allocator): substack(allocator) {}
+		COWVec substack;
+		NState() {
+			cowvec_construct(&substack, nullptr);
+		}
+		NState(COWVec_Allocator &allocator) {
+			cowvec_construct(&substack, &allocator);
+		}
+		NState(const NState &other): gen(other.gen), boff(other.boff) {
+			cowvec_construct(&substack, nullptr);
+			cowvec_copy(&substack, &other.substack);
+		}
+		NState(NState &&other): gen(other.gen), boff(other.boff) {
+			cowvec_construct(&substack, nullptr);
+			cowvec_move(&substack, &other.substack);
+		}
+		~NState() {
+			cowvec_destruct(&substack);
+		}
+		NState& operator=(const NState &ns) {
+			gen = ns.gen;
+			boff = ns.boff;
+			cowvec_copy(&substack, &ns.substack);
+			return *this;
+		}
+		NState& operator=(NState &&ns) {
+			gen = ns.gen;
+			boff = ns.boff;
+			cowvec_move(&substack, &ns.substack);
+			return *this;
+		}
 		template <typename... XArgs>
 		auto cmp(const NState &ns, size_t gen, size_t nstk, XArgs... xargs) const {
 			if (gen != ns.gen)
 				return gen <=> ns.gen;
 			if (boff != ns.boff)
 				return ns.boff <=> boff;
-			if (auto x = substack.cmp(ns.substack, nstk, xargs...); x != 0)
+			if (auto x = cowvec_cmp(&substack, &ns.substack, nstk, xargs...); x != 0)
 				return x;
 			return 0 <=> 0;
 		}
@@ -1319,13 +1420,22 @@ struct Execute {
 	size_t off = 0;
 	WConv wconv;
 	WChar wcprev = WConv::End;
-	Vec::Allocator allocator { nestoff + r.nmin };
-	std::optional<Vec> best;
+	COWVec_Allocator allocator;
+	COWVec best;
 	NInt bestmincount = 0; // note mincounts are negated so this means +infinity
 	QSet<NInt> epsq { r.nodes.size() };
 	QVec<NInt, NState> epsv { r.nodes.size() };
 	const Node *nodes = r.nodes.data();
-	Execute(const Regexp &r, minrx_regexec_flags_t flags, const char *bp, const char *ep) : r(r), flags(flags), wconv(r.enc, bp, ep) {}
+	Execute(const Regexp &r, minrx_regexec_flags_t flags, const char *bp, const char *ep) : r(r), flags(flags), wconv(r.enc, bp, ep) {
+		cowvec_allocator_construct(&allocator, nestoff + r.nmin);
+		cowvec_construct(&best, nullptr);
+	}
+	~Execute() {
+		while (!epsv.empty())
+			epsv.remove();
+		cowvec_destruct(&best);
+		cowvec_allocator_destruct(&allocator);
+	}
 	template <typename... XArgs>
 	INLINE
 	void add(QVec<NInt, NState> &ncsv, NInt k, NInt nstk, const NState &ns, WChar wcnext, XArgs... xargs) {
@@ -1335,28 +1445,28 @@ struct Execute {
 				auto [newly, newns] = ncsv.insert(k, ns);
 				if (newly)
 					new (&newns) NState(ns);
-				else if (auto x = ns.cmp(newns, gen, nstk, xargs...); x > 0 || (x == 0 && minvcnt && ns.substack.cmp(minvoff, minvcnt, newns.substack) > 0))
+				else if (auto x = ns.cmp(newns, gen, nstk, xargs...); x > 0 || (x == 0 && minvcnt && cowvec_cmp_from(minvoff, &ns.substack, &newns.substack, minvcnt) > 0))
 					newns = ns;
 				else
 					return;
 				newns.gen = gen;
 				if constexpr (sizeof... (XArgs) > 0) {
 					auto i = nstk - sizeof...(XArgs);
-					(newns.substack.put(i++, xargs), ...);
+					(cowvec_put(&newns.substack, i++, xargs), ...);
 				}
 			}
 		} else {
 			auto [newly, newns] = epsv.insert(k, ns);
 			if (newly)
 				new (&newns) NState(ns);
-			else if (auto x = ns.cmp(newns, gen, nstk, xargs...); x > 0 || (x == 0 && minvcnt && ns.substack.cmp(minvoff, minvcnt, newns.substack) > 0))
+			else if (auto x = ns.cmp(newns, gen, nstk, xargs...); x > 0 || (x == 0 && minvcnt && cowvec_cmp_from(minvoff, &ns.substack, &newns.substack, minvcnt) > 0))
 				newns = ns;
 			else
 				return;
 			newns.gen = gen;
 			if constexpr (sizeof... (XArgs) > 0) {
 				auto i = nstk - sizeof...(XArgs);
-				(newns.substack.put(i++, xargs), ...);
+				(cowvec_put(&newns.substack, i++, xargs), ...);
 			}
 			epsq.insert(k);
 		}
@@ -1368,22 +1478,22 @@ struct Execute {
 		do {
 			NInt k = epsq.remove();
 			NState &ns = epsv.lookup(k);
-			if (best.has_value() && ns.boff > best->get(suboff + 0))
+			if (cowvec_valid(&best) && ns.boff > cowvec_get(&best, suboff + 0))
 				continue;
 			const auto &n = nodes[k];
 			auto nstk = n.nstk;
 			switch (n.type) {
 			case Node::Exit:
 				{
-					auto b = ns.boff, e = off, mincount = r.nmin ? ns.substack.get(0) : (NInt) -1;
-					bool minvalid = r.nmin ? ns.substack.get(minvoff) < ((size_t) 1 << (SizeBits - 1)) : false;
-					if (!best.has_value()
-					    || b < best->get(suboff + 0)
-					    || (b == best->get(suboff + 0) && e > best->get(suboff + 1) && (!minvalid || mincount >= bestmincount)))
+					auto b = ns.boff, e = off, mincount = r.nmin ? cowvec_get(&ns.substack, 0) : (NInt) -1;
+					bool minvalid = r.nmin ? cowvec_get(&ns.substack, minvoff) < ((size_t) 1 << (SizeBits - 1)) : false;
+					if (!cowvec_valid(&best)
+					    || b < cowvec_get(&best, suboff + 0)
+					    || (b == cowvec_get(&best, suboff + 0) && e > cowvec_get(&best, suboff + 1) && (!minvalid || mincount >= bestmincount)))
 					{
-						best = ns.substack;
-						best->put(suboff + 0, b);
-						best->put(suboff + 1, e);
+						cowvec_copy(&best, &ns.substack);
+						cowvec_put(&best, suboff + 0, b);
+						cowvec_put(&best, suboff + 1, e);
 						if (minvalid)
 							bestmincount = MAX(bestmincount, mincount);
 					}
@@ -1415,10 +1525,10 @@ struct Execute {
 					size_t b = (size_t) 1 << (SizeBits - 1 - n.args[0] % SizeBits);
 					NState nscopy = ns;
 					b |= -b;
-					auto x = nscopy.substack.get(minvoff + w);
+					auto x = cowvec_get(&nscopy.substack, minvoff + w);
 					do {
 						if ((x & b) != 0)
-							nscopy.substack.put(minvoff + w, x & ~b);
+							cowvec_put(&nscopy.substack, minvoff + w, x & ~b);
 						b = -1;
 					} while ( w-- > 0);
 					add(ncsv, k + 1, nstk, nscopy, wcnext);
@@ -1430,23 +1540,23 @@ struct Execute {
 			case Node::MinR:
 				{
 					NState nscopy = ns;
-					auto mininc = off - nscopy.substack.get(n.nstk);
-					size_t oldlen = (size_t) -1 - nscopy.substack.get(n.args[0]);
-					mininc -= nscopy.substack.get(nestoff + n.args[0]);
-					nscopy.substack.put(nestoff + n.args[0], 0);
-					nscopy.substack.put(n.args[0], (size_t) -1 - (oldlen + mininc));
+					auto mininc = off - cowvec_get(&nscopy.substack, n.nstk);
+					size_t oldlen = (size_t) -1 - cowvec_get(&nscopy.substack, n.args[0]);
+					mininc -= cowvec_get(&nscopy.substack, nestoff + n.args[0]);
+					cowvec_put(&nscopy.substack, nestoff + n.args[0], 0);
+					cowvec_put(&nscopy.substack, n.args[0], (size_t) -1 - (oldlen + mininc));
 					for (auto i = n.args[0]; i-- > 0; ) {
-						oldlen = (size_t) -1 - nscopy.substack.get(i);
-						nscopy.substack.put(i, -1 - (oldlen + mininc));
-						nscopy.substack.put(nestoff + i, nscopy.substack.get(nestoff + i) + mininc);
+						oldlen = (size_t) -1 - cowvec_get(&nscopy.substack, i);
+						cowvec_put(&nscopy.substack, i, -1 - (oldlen + mininc));
+						cowvec_put(&nscopy.substack, nestoff + i, cowvec_get(&nscopy.substack, nestoff + i) + mininc);
 					}
 					add(ncsv, k + 1, nstk, nscopy, wcnext);
 				}
 				break;
 			case Node::Next:
 				add(ncsv, k + 1, nstk, ns, wcnext);
-				if (n.args[1] && off > ns.substack.get(nstk + 3 - 1))
-					add(ncsv, k - n.args[0], nstk + 3, ns, wcnext, ns.substack.get(nstk), ns.substack.get(nstk + 1) - 1, (NInt) off);
+				if (n.args[1] && off > cowvec_get(&ns.substack, nstk + 3 - 1))
+					add(ncsv, k - n.args[0], nstk + 3, ns, wcnext, cowvec_get(&ns.substack, nstk), cowvec_get(&ns.substack, nstk + 1) - 1, (NInt) off);
 				break;
 			case Node::Skip:
 				add(ncsv, k + 1, nstk, ns, wcnext, (NInt) off, (NInt) 1 ^ n.args[1]);
@@ -1455,20 +1565,20 @@ struct Execute {
 			case Node::SubL:
 				{
 					NState nscopy = ns;
-					nscopy.substack.put(nstk - 1, off);
+					cowvec_put(&nscopy.substack, nstk - 1, off);
 					if (n.args[0] != (NInt) -1 && (flags & MINRX_REG_NOSUBRESET) == 0)
 						for (auto i = n.args[0] + 1; i <= n.args[1]; ++i) {
-							nscopy.substack.put(suboff + i * 2, -1);
-							nscopy.substack.put(suboff + i * 2 + 1, -1);
+							cowvec_put(&nscopy.substack, suboff + i * 2, -1);
+							cowvec_put(&nscopy.substack, suboff + i * 2 + 1, -1);
 						}
 					add(ncsv, k + 1, nstk, nscopy, wcnext);
 				}
 				break;
 			case Node::SubR:
-				if (n.args[0] != (NInt) -1 && ((flags & MINRX_REG_FIRSTSUB) == 0 || ns.substack.get(suboff + n.args[0] * 2) == (NInt) -1)) {
+				if (n.args[0] != (NInt) -1 && ((flags & MINRX_REG_FIRSTSUB) == 0 || cowvec_get(&ns.substack, suboff + n.args[0] * 2) == (NInt) -1)) {
 					NState nscopy = ns;
-					nscopy.substack.put(suboff + n.args[0] * 2 + 0, ns.substack.get(nstk));
-					nscopy.substack.put(suboff + n.args[0] * 2 + 1, off);
+					cowvec_put(&nscopy.substack, suboff + n.args[0] * 2 + 0, cowvec_get(&ns.substack, nstk));
+					cowvec_put(&nscopy.substack, suboff + n.args[0] * 2 + 1, off);
 					add(ncsv, k + 1, nstk, nscopy, wcnext);
 				} else {
 					add(ncsv, k + 1, nstk, ns, wcnext);
@@ -1553,7 +1663,7 @@ struct Execute {
 		}
 		nsinit.boff = off;
 		for (size_t i = 0; i < r.nmin; ++i)
-			nsinit.substack.put(nestoff + i, 0);
+			cowvec_put(&nsinit.substack, nestoff + i, 0);
 		add(mcsvs[0], 0, 0, nsinit, wcnext);
 		if (!epsq.empty())
 			epsclosure(mcsvs[0], wcnext);
@@ -1566,14 +1676,14 @@ struct Execute {
 				auto [n, ns] = mcsvs[0].remove();
 				add(mcsvs[1], n + 1, nodes[n].nstk, ns, wcnext);
 			}
-			if (!best.has_value()) {
+			if (!cowvec_valid(&best)) {
 				nsinit.boff = off;
 				add(mcsvs[1], 0, 0, nsinit, wcnext);
 			}
 			if (!epsq.empty())
 				epsclosure(mcsvs[1], wcnext);
 			if (mcsvs[1].empty()) {
-				if (best.has_value())
+				if (cowvec_valid(&best))
 					break;
 				if ((flags & MINRX_REG_NOFIRSTBYTES) == 0 && r.firstbytes.has_value())
 					goto zoom;
@@ -1586,27 +1696,27 @@ struct Execute {
 				auto [n, ns] = mcsvs[1].remove();
 				add(mcsvs[0], n + 1, nodes[n].nstk, ns, wcnext);
 			}
-			if (!best.has_value()) {
+			if (!cowvec_valid(&best)) {
 				nsinit.boff = off;
 				add(mcsvs[0], 0, 0, nsinit, wcnext);
 			}
 			if (!epsq.empty())
 				epsclosure(mcsvs[0], wcnext);
 			if (mcsvs[0].empty()) {
-				if (best.has_value())
+				if (cowvec_valid(&best))
 					break;
 				if ((flags & MINRX_REG_NOFIRSTBYTES) == 0 && r.firstbytes.has_value())
 					goto zoom;
 			}
 		}
 	exit:
-		if (best.has_value()) {
+		if (cowvec_valid(&best)) {
 			if (rm) {
 				size_t nsub = MIN(nm, r.nsub);
 				size_t i;
 				for (i = 0; i < nsub; ++i) {
-					rm[i].rm_so = (*best->storage)[suboff + i * 2];
-					rm[i].rm_eo = (*best->storage)[suboff + i * 2 + 1];
+					rm[i].rm_so = cowvec_get(&best, suboff + i * 2);
+					rm[i].rm_eo = cowvec_get(&best, suboff + i * 2 + 1);
 				}
 				for (; i < nm; ++i)
 					rm[i].rm_so = rm[i].rm_eo = -1;
