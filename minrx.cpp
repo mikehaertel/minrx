@@ -798,7 +798,7 @@ struct Compile {
 		auto satmul = [](NInt x, NInt y) -> NInt {
 			return (x == 0 || y == 0) ? 0 : ((x * y / x == y) ? x * y : -1);
 		};
-		if (wc < L'0' || wc > L'9')
+		if (! std::iswdigit(wc))
 			return false;
 		NInt v = 0;
 		do {
@@ -806,12 +806,12 @@ struct Compile {
 			if (v == (NInt) -1 || (v += wc - L'0') < (NInt) wc - L'0') {
 				do
 					wc = wconv.nextchr();
-				while (wc >= L'0' && wc <= L'9');
+				while (std::iswdigit(wc));
 				n = -1;
 				return true;
 			}
 			wc = wconv.nextchr();
-		} while (wc >= L'0' && wc <= L'9');
+		} while (std::iswdigit(wc));
 		n = v;
 		return true;
 	}
