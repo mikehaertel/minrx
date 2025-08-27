@@ -278,107 +278,231 @@ cowvec_valid(const COWVec *c)
 	return c->storage != nullptr;
 }
 
-template <typename UINT>
 struct QSet {
 	uint64_t *bits[10];
 	uint64_t bits0;
-	uint64_t *bitsfree = nullptr;
-	int depth = 0;
-	QSet(UINT limit) {
-		size_t s[10], t = 0;
-		do
-			t += (limit = s[depth++] = (limit + 63u) / 64u);
-		while (limit > 1);
-		uint64_t *next = bitsfree = (uint64_t *) ::operator new(t * sizeof (uint64_t));
-		bits[0] = &bits0;
-		for (int i = 1; i < depth; ++i)
-			bits[i] = next, next += s[depth - 1 - i];
-		bits0 = 0;
-	}
-	~QSet() { if (bitsfree) ::operator delete(bitsfree); }
-	static uint64_t bit(UINT k) { return (uint64_t) 1 << (k & 0x3F); }
-	bool empty() const { return !bits0; }
-	bool contains(UINT k) const {
-		int i = 0, s = 6 * depth;
-		UINT j = 0;
-		while (i < depth) {
-			auto x = bits[i++][j];
-			s -= 6;
-			j = k >> s;
-			auto w = bit(j);
-			if (!(x & w))
-				return false;
-		}
-		return true;
-	}
-	bool insert(UINT k) {
-		bool r = false;
-		int i = 0, s = 6 * depth;
-		UINT j = 0;
-		while (i < depth) {
-			auto bp = &bits[i++][j];
-			auto x = *bp;
-			s -= 6;
-			j = k >> s;
-			auto w = bit(j);
-			if ((x & w) == 0) {
-				if (i < depth)
-					bits[i][j] = 0;
-				else
-					r = true;
-			}
-			*bp = x | w;
-		}
-		return r;
-	}
-	UINT remove() { // caller must ensure !empty()
-		UINT k = 0;
-		int i = 0, d = depth;
-		do
-			k = (k << 6) | ctz(bits[i++][k]);
-		while (i != d);
-		UINT r = k;
-		do {
-			--i;
-			auto w = bit(k);
-			k >>= 6;
-			if ((bits[i][k] &= ~w) != 0)
-				break;
-		} while (i != 0);
-		return r;
-	}
+	uint64_t *bitsfree;
+	int depth;
 };
 
-template <typename UINT, typename DATA>
-struct QVec {
-	QSet<UINT> qset;
-	DATA *storage;
-	QVec(UINT l): qset(l), storage(static_cast<DATA *>(::operator new(l * sizeof (DATA)))) {}
-	~QVec() {
-		clear();
-		::operator delete(storage);
+static bool
+qset_construct(QSet *q, size_t limit)
+{
+	size_t s[10], t = 0;
+	q->depth = 0;
+	do
+		t += (limit = s[q->depth++] = (limit + 63u) / 64u);
+	while (limit > 1);
+	uint64_t *next = q->bitsfree = (uint64_t *) malloc(t * sizeof (uint64_t));
+	if (!next)
+		return false;
+	q->bits[0] = &q->bits0;
+	for (int i = 1; i < q->depth; ++i)
+		q->bits[i] = next, next += s[q->depth - 1 - i];
+	q->bits0 = 0;
+	return true;
+}
+
+static void
+qset_destruct(QSet *q)
+{
+	if (q->bitsfree)
+		free(q->bitsfree);
+}
+
+static uint64_t
+bit(size_t k)
+{
+	return (uint64_t) 1 << (k & 0x3F);
+}
+
+static bool
+qset_empty(const QSet *q)
+{
+	return !q->bits0;
+}
+
+static bool
+qset_contains(const QSet *q, size_t k)
+{
+	int i = 0, s = 6 * q->depth;
+	size_t j = 0;
+	while (i < q->depth) {
+		auto x = q->bits[i++][j];
+		s -= 6;
+		j = k >> s;
+		auto w = bit(j);
+		if (!(x & w))
+			return false;
 	}
-	void clear() {
-		while (!qset.empty()) {
-			auto i = qset.remove();
-			storage[i].~DATA();
+	return true;
+}
+
+static bool
+qset_insert(QSet *q, size_t k)
+{
+	bool r = false;
+	int i = 0, s = 6 * q->depth;
+	size_t j = 0;
+	while (i < q->depth) {
+		auto bp = &q->bits[i++][j];
+		auto x = *bp;
+		s -= 6;
+		j = k >> s;
+		auto w = bit(j);
+		if ((x & w) == 0) {
+			if (i < q->depth)
+				q->bits[i][j] = 0;
+			else
+				r = true;
 		}
+		*bp = x | w;
 	}
-	bool contains(UINT k) const { return qset.contains(k); }
-	bool empty() const { return qset.empty(); }
-	std::tuple<bool, DATA&> insert(UINT k, const DATA&) {
-		bool newly = qset.insert(k);
-		// WARNING: if newly inserted then we are returning a reference to uninitialized memory
-		// and it is the caller's responsibility to construct valid DATA there.
-		return {newly, storage[k]};
-	}
-	DATA &lookup(UINT k) { return storage[k]; }
-	const DATA &lookup(UINT k) const { return storage[k]; }
-	std::tuple<UINT, DATA> remove() {
-		auto k = qset.remove();
-		return {k, std::move(storage[k])};
-	}
+	return r;
+}
+
+static size_t
+qset_remove(QSet *q) // caller must ensure !empty()
+{
+	size_t k = 0;
+	int i = 0, d = q->depth;
+	do
+		k = (k << 6) | ctz(q->bits[i++][k]);
+	while (i != d);
+	size_t r = k;
+	do {
+		--i;
+		auto w = bit(k);
+		k >>= 6;
+		if ((q->bits[i][k] &= ~w) != 0)
+			break;
+	} while (i != 0);
+	return r;
+}
+
+struct NState {
+	size_t gen;
+	size_t boff;
+	COWVec substack;
 };
+
+static void
+nstate_copy(NState *dstns, const NState *srcns)
+{
+	dstns->gen = srcns->gen;
+	dstns->boff = srcns->boff;
+	cowvec_copy(&dstns->substack, &srcns->substack);
+}
+
+static void
+nstate_move(NState *dstns, NState *srcns)
+{
+	dstns->gen = srcns->gen;
+	dstns->boff = srcns->boff;
+	cowvec_move(&dstns->substack, &srcns->substack);
+}
+
+static void
+nstate_construct(NState *ns, COWVec_Allocator *a)
+{
+	ns->gen = 0;
+	ns->boff = 0;
+	cowvec_construct(&ns->substack, a);
+}
+
+static void
+nstate_destruct(NState *ns)
+{
+	cowvec_destruct(&ns->substack);
+}
+
+static void
+nstate_construct_copy(NState *dstns, const NState *srcns)
+{
+	nstate_construct(dstns, nullptr);
+	nstate_copy(dstns, srcns);
+}
+
+static void
+nstate_construct_move(NState *dstns, NState *srcns)
+{
+	nstate_construct(dstns, nullptr);
+	nstate_move(dstns, srcns);
+}
+
+template <typename... XArgs>
+static auto
+nstate_cmp(const NState *xns, const NState *yns, size_t gen, size_t nstk, XArgs... xargs)
+{
+	if (gen != yns->gen)
+		return gen <=> yns->gen;
+	if (xns->boff != yns->boff)
+		return yns->boff <=> xns->boff;
+	if (auto x = cowvec_cmp(&xns->substack, &yns->substack, nstk, xargs...); x != 0)
+		return x;
+	return 0 <=> 0;
+}
+
+struct QVec {
+	QSet qset;
+	NState *storage;
+};
+
+static void
+qvec_construct(QVec *q, size_t l)
+{
+	if (!qset_construct(&q->qset, l))
+		throw std::bad_alloc();
+	q->storage = nullptr;
+	q->storage = static_cast<NState *>(::operator new(l * sizeof (NState)));
+}
+
+static void
+qvec_clear(QVec *q)
+{
+	while (!qset_empty(&q->qset)) {
+		auto i = qset_remove(&q->qset);
+		nstate_destruct(&q->storage[i]);
+	}
+}
+
+static void
+qvec_destruct(QVec *q)
+{
+	qvec_clear(q);
+	::operator delete(q->storage);
+	qset_destruct(&q->qset);
+}
+
+static bool
+qvec_empty(QVec *q)
+{
+	return qset_empty(&q->qset);
+}
+
+static std::pair<bool, NState *>
+qvec_insert(QVec *q, size_t k, const NState *)
+{
+	bool newly = qset_insert(&q->qset, k);
+	// WARNING: if newly inserted then we are returning a reference to uninitialized memory
+	// and it is the caller's responsibility to construct a valid NState there.
+	return {newly, &q->storage[k]};
+}
+
+static NState *
+qvec_lookup(QVec *q, size_t k)
+{
+	return &q->storage[k];
+}
+
+static std::pair<size_t, NState>
+qvec_remove(QVec *q)
+{
+	auto k = qset_remove(&q->qset);
+	std::pair<size_t, NState> r {k, {}};
+	nstate_construct_move(&r.second, &q->storage[k]);
+	return r;
+}
 
 typedef int32_t WChar;			// because wchar_t may not be 32 bits
 constexpr int32_t WCharMax = 0x10FFFF;	// maximum code point: valid for Unicode and (FIXME!) blithely assumed for non-Unicode
@@ -1290,17 +1414,31 @@ struct Compile {
 	std::optional<CSet> firstclosure(const std::vector<Node> &nodes) {
 		if (nodes.size() == 0)
 			return {};
-		QSet<NInt> epsq(nodes.size()), epsv(nodes.size()), firsts(nodes.size());
-		auto add = [&epsq, &epsv](NInt n) { if (!epsv.contains(n)) { epsq.insert(n); epsv.insert(n); } };
-		epsq.insert(0);
+		QSet epsq, epsv, firsts;
+		if (!qset_construct(&epsq, nodes.size()))
+			return {};
+		if (!qset_construct(&epsv, nodes.size())) {
+			qset_destruct(&epsq);
+			return {};
+		}
+		if (!qset_construct(&firsts, nodes.size())) {
+			qset_destruct(&epsq);
+			qset_destruct(&epsv);
+			return {};
+		}
+		auto add = [&epsq, &epsv](NInt n) { if (!qset_contains(&epsv, n)) { qset_insert(&epsq, n); qset_insert(&epsv, n); } };
+		qset_insert(&epsq, 0);
 		do {
-			auto k = epsq.remove();
+			auto k = qset_remove(&epsq);
 			auto &n = nodes[k];
 			if (n.type <= Node::CSet)
-				firsts.insert(k);
+				qset_insert(&firsts, k);
 			else
 				switch (n.type) {
 				case Node::Exit:
+					qset_destruct(&firsts);
+					qset_destruct(&epsv);
+					qset_destruct(&epsq);
 					return {};
 				case Node::Fork:
 					do {
@@ -1324,16 +1462,19 @@ struct Compile {
 					add(k + 1);
 					break;
 				}
-		} while (!epsq.empty());
+		} while (!qset_empty(&epsq));
 		CSet cs(enc);
-		while (!firsts.empty()) {
-			auto k = firsts.remove();
+		while (!qset_empty(&firsts)) {
+			auto k = qset_remove(&firsts);
 			auto t = nodes[k].type;
 			if (t <= WCharMax)
 				cs.set(t);
 			else
 				cs |= csets[nodes[k].args[0]];
 		}
+		qset_destruct(&firsts);
+		qset_destruct(&epsv);
+		qset_destruct(&epsq);
 		return cs;
 	}
 	std::pair<std::optional<const std::array<bool, 256>>, std::optional<char>>
@@ -1366,50 +1507,6 @@ struct Compile {
 
 struct Execute {
 	constexpr static size_t SizeBits = std::numeric_limits<size_t>::digits;
-	struct NState {
-		size_t gen = 0;
-		size_t boff;
-		COWVec substack;
-		NState() {
-			cowvec_construct(&substack, nullptr);
-		}
-		NState(COWVec_Allocator &allocator) {
-			cowvec_construct(&substack, &allocator);
-		}
-		NState(const NState &other): gen(other.gen), boff(other.boff) {
-			cowvec_construct(&substack, nullptr);
-			cowvec_copy(&substack, &other.substack);
-		}
-		NState(NState &&other): gen(other.gen), boff(other.boff) {
-			cowvec_construct(&substack, nullptr);
-			cowvec_move(&substack, &other.substack);
-		}
-		~NState() {
-			cowvec_destruct(&substack);
-		}
-		NState& operator=(const NState &ns) {
-			gen = ns.gen;
-			boff = ns.boff;
-			cowvec_copy(&substack, &ns.substack);
-			return *this;
-		}
-		NState& operator=(NState &&ns) {
-			gen = ns.gen;
-			boff = ns.boff;
-			cowvec_move(&substack, &ns.substack);
-			return *this;
-		}
-		template <typename... XArgs>
-		auto cmp(const NState &ns, size_t gen, size_t nstk, XArgs... xargs) const {
-			if (gen != ns.gen)
-				return gen <=> ns.gen;
-			if (boff != ns.boff)
-				return ns.boff <=> boff;
-			if (auto x = cowvec_cmp(&substack, &ns.substack, nstk, xargs...); x != 0)
-				return x;
-			return 0 <=> 0;
-		}
-	};
 	const Regexp &r;
 	const minrx_regexec_flags_t flags;
 	const size_t suboff = r.nmin + r.nstk;
@@ -1423,75 +1520,78 @@ struct Execute {
 	COWVec_Allocator allocator;
 	COWVec best;
 	NInt bestmincount = 0; // note mincounts are negated so this means +infinity
-	QSet<NInt> epsq { r.nodes.size() };
-	QVec<NInt, NState> epsv { r.nodes.size() };
+	QSet epsq;
+	QVec epsv;
 	const Node *nodes = r.nodes.data();
 	Execute(const Regexp &r, minrx_regexec_flags_t flags, const char *bp, const char *ep) : r(r), flags(flags), wconv(r.enc, bp, ep) {
+		if (!qset_construct(&epsq, r.nodes.size()))
+			throw std::bad_alloc();
+		qvec_construct(&epsv, r.nodes.size());
 		cowvec_allocator_construct(&allocator, nestoff + r.nmin);
 		cowvec_construct(&best, nullptr);
 	}
 	~Execute() {
-		while (!epsv.empty())
-			epsv.remove();
+		qvec_destruct(&epsv);
+		qset_destruct(&epsq);
 		cowvec_destruct(&best);
 		cowvec_allocator_destruct(&allocator);
 	}
 	template <typename... XArgs>
 	INLINE
-	void add(QVec<NInt, NState> &ncsv, NInt k, NInt nstk, const NState &ns, WChar wcnext, XArgs... xargs) {
+	void add(QVec &ncsv, NInt k, NInt nstk, const NState *nsp, WChar wcnext, XArgs... xargs) {
 		const Node &n = nodes[k];
 		if (n.type <= Node::CSet) {
 			if (n.type == (NInt) wcnext || (n.type == Node::CSet && r.csets[n.args[0]].test(wcnext))) {
-				auto [newly, newns] = ncsv.insert(k, ns);
+				auto [newly, newnsp] = qvec_insert(&ncsv, k, nsp);
 				if (newly)
-					new (&newns) NState(ns);
-				else if (auto x = ns.cmp(newns, gen, nstk, xargs...); x > 0 || (x == 0 && minvcnt && cowvec_cmp_from(minvoff, &ns.substack, &newns.substack, minvcnt) > 0))
-					newns = ns;
+					new (newnsp) NState(*nsp), nstate_construct_copy(newnsp, nsp);
+				else if (auto x = nstate_cmp(nsp, newnsp, gen, nstk, xargs...); x > 0 || (x == 0 && minvcnt && cowvec_cmp_from(minvoff, &nsp->substack, &newnsp->substack, minvcnt) > 0))
+					nstate_copy(newnsp, nsp);
 				else
 					return;
-				newns.gen = gen;
+				newnsp->gen = gen;
 				if constexpr (sizeof... (XArgs) > 0) {
 					auto i = nstk - sizeof...(XArgs);
-					(cowvec_put(&newns.substack, i++, xargs), ...);
+					(cowvec_put(&newnsp->substack, i++, xargs), ...);
 				}
 			}
 		} else {
-			auto [newly, newns] = epsv.insert(k, ns);
+			auto [newly, newnsp] = qvec_insert(&epsv, k, nsp);
 			if (newly)
-				new (&newns) NState(ns);
-			else if (auto x = ns.cmp(newns, gen, nstk, xargs...); x > 0 || (x == 0 && minvcnt && cowvec_cmp_from(minvoff, &ns.substack, &newns.substack, minvcnt) > 0))
-				newns = ns;
+				new (newnsp) NState(*nsp), nstate_construct_copy(newnsp, nsp);
+			else if (auto x = nstate_cmp(nsp, newnsp, gen, nstk, xargs...); x > 0 || (x == 0 && minvcnt && cowvec_cmp_from(minvoff, &nsp->substack, &newnsp->substack, minvcnt) > 0))
+				nstate_copy(newnsp, nsp);
 			else
 				return;
-			newns.gen = gen;
+			newnsp->gen = gen;
 			if constexpr (sizeof... (XArgs) > 0) {
 				auto i = nstk - sizeof...(XArgs);
-				(cowvec_put(&newns.substack, i++, xargs), ...);
+				(cowvec_put(&newnsp->substack, i++, xargs), ...);
 			}
-			epsq.insert(k);
+			qset_insert(&epsq, k);
 		}
 	}
-	void epsclosure(QVec<NInt, NState> &ncsv, WChar wcnext) {
+	void epsclosure(QVec &ncsv, WChar wcnext) {
 		auto nodes = this->nodes;
 		auto is_word = r.enc == WConv::Encoding::Byte ? [](WChar b) { return b == '_' || isalnum(b); }
 							      : [](WChar wc) { return wc == L'_' || iswalnum(wc); };
 		do {
-			NInt k = epsq.remove();
-			NState &ns = epsv.lookup(k);
-			if (cowvec_valid(&best) && ns.boff > cowvec_get(&best, suboff + 0))
+			NInt k = qset_remove(&epsq);
+			NState *nsp = qvec_lookup(&epsv, k);
+			if (cowvec_valid(&best) && nsp->boff > cowvec_get(&best, suboff + 0))
 				continue;
 			const auto &n = nodes[k];
 			auto nstk = n.nstk;
 			switch (n.type) {
 			case Node::Exit:
 				{
-					auto b = ns.boff, e = off, mincount = r.nmin ? cowvec_get(&ns.substack, 0) : (NInt) -1;
-					bool minvalid = r.nmin ? cowvec_get(&ns.substack, minvoff) < ((size_t) 1 << (SizeBits - 1)) : false;
+					auto b = nsp->boff, e = off, mincount = r.nmin ? cowvec_get(&nsp->substack, 0) : (NInt) -1;
+					bool minvalid = r.nmin ? cowvec_get(&nsp->substack, minvoff) < ((size_t) 1 << (SizeBits - 1)) : false;
 					if (!cowvec_valid(&best)
 					    || b < cowvec_get(&best, suboff + 0)
 					    || (b == cowvec_get(&best, suboff + 0) && e > cowvec_get(&best, suboff + 1) && (!minvalid || mincount >= bestmincount)))
 					{
-						cowvec_copy(&best, &ns.substack);
+						cowvec_copy(&best, &nsp->substack);
 						cowvec_put(&best, suboff + 0, b);
 						cowvec_put(&best, suboff + 1, e);
 						if (minvalid)
@@ -1503,27 +1603,28 @@ struct Execute {
 				{
 					NInt priority = (NInt) -1;
 					do {
-						add(ncsv, k + 1, nstk, ns, wcnext, priority--);
+						add(ncsv, k + 1, nstk, nsp, wcnext, priority--);
 						k = k + 1 + nodes[k].args[0];
 					} while (nodes[k].type != Node::Join);
 				}
 				break;
 			case Node::Goto:
-				add(ncsv, k + 1 + n.args[1], nstk, ns, wcnext);
+				add(ncsv, k + 1 + n.args[1], nstk, nsp, wcnext);
 				break;
 			case Node::Join:
-				add(ncsv, k + 1, nstk, ns, wcnext);
+				add(ncsv, k + 1, nstk, nsp, wcnext);
 				break;
 			case Node::Loop:
-				add(ncsv, k + 1, nstk, ns, wcnext, (NInt) off, (NInt) -1, (NInt) off);
+				add(ncsv, k + 1, nstk, nsp, wcnext, (NInt) off, (NInt) -1, (NInt) off);
 				if (n.args[1])
-					add(ncsv, k + 1 + n.args[0], nstk, ns, wcnext, (NInt) off, (NInt) 0, (NInt) off);
+					add(ncsv, k + 1 + n.args[0], nstk, nsp, wcnext, (NInt) off, (NInt) 0, (NInt) off);
 				break;
 			case Node::MinB:
 				{
 					size_t w = n.args[0] / SizeBits;
 					size_t b = (size_t) 1 << (SizeBits - 1 - n.args[0] % SizeBits);
-					NState nscopy = ns;
+					NState nscopy;
+					nstate_construct_copy(&nscopy, nsp);
 					b |= -b;
 					auto x = cowvec_get(&nscopy.substack, minvoff + w);
 					do {
@@ -1531,15 +1632,17 @@ struct Execute {
 							cowvec_put(&nscopy.substack, minvoff + w, x & ~b);
 						b = -1;
 					} while ( w-- > 0);
-					add(ncsv, k + 1, nstk, nscopy, wcnext);
+					add(ncsv, k + 1, nstk, &nscopy, wcnext);
+					nstate_destruct(&nscopy);
 				}
 				break;
 			case Node::MinL:
-				add(ncsv, k + 1, nstk, ns, wcnext, off);
+				add(ncsv, k + 1, nstk, nsp, wcnext, off);
 				break;
 			case Node::MinR:
 				{
-					NState nscopy = ns;
+					NState nscopy;
+					nstate_construct_copy(&nscopy, nsp);
 					auto mininc = off - cowvec_get(&nscopy.substack, n.nstk);
 					size_t oldlen = (size_t) -1 - cowvec_get(&nscopy.substack, n.args[0]);
 					mininc -= cowvec_get(&nscopy.substack, nestoff + n.args[0]);
@@ -1550,90 +1653,98 @@ struct Execute {
 						cowvec_put(&nscopy.substack, i, -1 - (oldlen + mininc));
 						cowvec_put(&nscopy.substack, nestoff + i, cowvec_get(&nscopy.substack, nestoff + i) + mininc);
 					}
-					add(ncsv, k + 1, nstk, nscopy, wcnext);
+					add(ncsv, k + 1, nstk, &nscopy, wcnext);
+					nstate_destruct(&nscopy);
 				}
 				break;
 			case Node::Next:
-				add(ncsv, k + 1, nstk, ns, wcnext);
-				if (n.args[1] && off > cowvec_get(&ns.substack, nstk + 3 - 1))
-					add(ncsv, k - n.args[0], nstk + 3, ns, wcnext, cowvec_get(&ns.substack, nstk), cowvec_get(&ns.substack, nstk + 1) - 1, (NInt) off);
+				add(ncsv, k + 1, nstk, nsp, wcnext);
+				if (n.args[1] && off > cowvec_get(&nsp->substack, nstk + 3 - 1))
+					add(ncsv, k - n.args[0], nstk + 3, nsp, wcnext, cowvec_get(&nsp->substack, nstk), cowvec_get(&nsp->substack, nstk + 1) - 1, (NInt) off);
 				break;
 			case Node::Skip:
-				add(ncsv, k + 1, nstk, ns, wcnext, (NInt) off, (NInt) 1 ^ n.args[1]);
-				add(ncsv, k + 1 + n.args[0], nstk, ns, wcnext, (NInt) off, (NInt) 0 ^ n.args[1]);
+				add(ncsv, k + 1, nstk, nsp, wcnext, (NInt) off, (NInt) 1 ^ n.args[1]);
+				add(ncsv, k + 1 + n.args[0], nstk, nsp, wcnext, (NInt) off, (NInt) 0 ^ n.args[1]);
 				break;
 			case Node::SubL:
 				{
-					NState nscopy = ns;
+					NState nscopy;
+					nstate_construct_copy(&nscopy, nsp);
 					cowvec_put(&nscopy.substack, nstk - 1, off);
 					if (n.args[0] != (NInt) -1 && (flags & MINRX_REG_NOSUBRESET) == 0)
 						for (auto i = n.args[0] + 1; i <= n.args[1]; ++i) {
 							cowvec_put(&nscopy.substack, suboff + i * 2, -1);
 							cowvec_put(&nscopy.substack, suboff + i * 2 + 1, -1);
 						}
-					add(ncsv, k + 1, nstk, nscopy, wcnext);
+					add(ncsv, k + 1, nstk, &nscopy, wcnext);
+					nstate_destruct(&nscopy);
 				}
 				break;
 			case Node::SubR:
-				if (n.args[0] != (NInt) -1 && ((flags & MINRX_REG_FIRSTSUB) == 0 || cowvec_get(&ns.substack, suboff + n.args[0] * 2) == (NInt) -1)) {
-					NState nscopy = ns;
-					cowvec_put(&nscopy.substack, suboff + n.args[0] * 2 + 0, cowvec_get(&ns.substack, nstk));
+				if (n.args[0] != (NInt) -1 && ((flags & MINRX_REG_FIRSTSUB) == 0 || cowvec_get(&nsp->substack, suboff + n.args[0] * 2) == (NInt) -1)) {
+					NState nscopy;
+					nstate_construct_copy(&nscopy, nsp);
+					cowvec_put(&nscopy.substack, suboff + n.args[0] * 2 + 0, cowvec_get(&nsp->substack, nstk));
 					cowvec_put(&nscopy.substack, suboff + n.args[0] * 2 + 1, off);
-					add(ncsv, k + 1, nstk, nscopy, wcnext);
+					add(ncsv, k + 1, nstk, &nscopy, wcnext);
+					nstate_destruct(&nscopy);
 				} else {
-					add(ncsv, k + 1, nstk, ns, wcnext);
+					add(ncsv, k + 1, nstk, nsp, wcnext);
 				}
 				break;
 			case Node::ZBOB:
 				if (off == 0 && (flags & MINRX_REG_NOTBOL) == 0)
-					add(ncsv, k + 1, nstk, ns, wcnext);
+					add(ncsv, k + 1, nstk, nsp, wcnext);
 				break;
 			case Node::ZEOB:
 				if (wcnext == WConv::End && (flags & MINRX_REG_NOTEOL) == 0)
-					add(ncsv, k + 1, nstk, ns, wcnext);
+					add(ncsv, k + 1, nstk, nsp, wcnext);
 				break;
 			case Node::ZBOL:
 				if (((off == 0 && (flags & MINRX_REG_NOTBOL) == 0)) || wcprev == L'\n')
-					add(ncsv, k + 1, nstk, ns, wcnext);
+					add(ncsv, k + 1, nstk, nsp, wcnext);
 				break;
 			case Node::ZEOL:
 				if (((wcnext == WConv::End && (flags & MINRX_REG_NOTEOL) == 0)) || wcnext == L'\n')
-					add(ncsv, k + 1, nstk, ns, wcnext);
+					add(ncsv, k + 1, nstk, nsp, wcnext);
 				break;
 			case Node::ZBOW:
 				if ((off == 0 || !is_word(wcprev)) && (wcnext != WConv::End && is_word(wcnext)))
-					add(ncsv, k + 1, nstk, ns, wcnext);
+					add(ncsv, k + 1, nstk, nsp, wcnext);
 				break;
 			case Node::ZEOW:
 				if ((off != 0 && is_word(wcprev)) && (wcnext == WConv::End || !is_word(wcnext)))
-					add(ncsv, k + 1, nstk, ns, wcnext);
+					add(ncsv, k + 1, nstk, nsp, wcnext);
 				break;
 			case Node::ZXOW:
 				if (   ((off == 0 || !is_word(wcprev)) && (wcnext != WConv::End && is_word(wcnext)))
 				    || ((off != 0 && is_word(wcprev)) && (wcnext == WConv::End || !is_word(wcnext))))
-					add(ncsv, k + 1, nstk, ns, wcnext);
+					add(ncsv, k + 1, nstk, nsp, wcnext);
 				break;
 			case Node::ZNWB:
 				if (   (off == 0 && wcnext == WConv::End)
 				    || (off == 0 && wcnext != WConv::End && !is_word(wcnext))
 				    || (off != 0 && !is_word(wcprev) && wcnext == WConv::End)
 				    || (off != 0 && wcnext != WConv::End && is_word(wcprev) == is_word(wcnext)))
-					add(ncsv, k + 1, nstk, ns, wcnext);
+					add(ncsv, k + 1, nstk, nsp, wcnext);
 				break;
 			default:
 				abort();
 				break;
 			}
-		} while (!epsq.empty());
+		} while (!qset_empty(&epsq));
 	}
 	int execute(size_t nm, minrx_regmatch_t *rm) {
-		QVec<NInt, NState> mcsvs[2] { r.nodes.size(), r.nodes.size() };
+		QVec mcsvs[2];
+		qvec_construct(&mcsvs[0], r.nodes.size());
+		qvec_construct(&mcsvs[1], r.nodes.size());
 		off = wconv.off();
 		auto wcnext = wconv.nextchr();
 		if ((flags & MINRX_REG_RESUME) != 0 && rm && rm[0].rm_eo > 0)
 			while (wcnext != WConv::End && (ptrdiff_t) off < rm[0].rm_eo)
 				wcprev = wcnext, off = wconv.off(), wcnext = wconv.nextchr();
-		NState nsinit(allocator);
+		NState nsinit;
+		nstate_construct(&nsinit, &allocator);
 		if ((flags & MINRX_REG_NOFIRSTBYTES) == 0 && r.firstbytes.has_value() && !r.firstcset->test(wcnext)) {
 		zoom:
 			auto cp = wconv.cp, ep = wconv.ep;
@@ -1664,25 +1775,26 @@ struct Execute {
 		nsinit.boff = off;
 		for (size_t i = 0; i < r.nmin; ++i)
 			cowvec_put(&nsinit.substack, nestoff + i, 0);
-		add(mcsvs[0], 0, 0, nsinit, wcnext);
-		if (!epsq.empty())
+		add(mcsvs[0], 0, 0, &nsinit, wcnext);
+		if (!qset_empty(&epsq))
 			epsclosure(mcsvs[0], wcnext);
 		for (;;) { // unrolled to ping-pong roles of mcsvs[0]/[1]
 			if (wcnext == WConv::End)
 				break;
 			++gen;
 			wcprev = wcnext, off = wconv.off(), wcnext = wconv.nextchr();
-			while (!mcsvs[0].empty()) {
-				auto [n, ns] = mcsvs[0].remove();
-				add(mcsvs[1], n + 1, nodes[n].nstk, ns, wcnext);
+			while (!qvec_empty(&mcsvs[0])) {
+				auto [n, ns] = qvec_remove(&mcsvs[0]);
+				add(mcsvs[1], n + 1, nodes[n].nstk, &ns, wcnext);
+				nstate_destruct(&ns);
 			}
 			if (!cowvec_valid(&best)) {
 				nsinit.boff = off;
-				add(mcsvs[1], 0, 0, nsinit, wcnext);
+				add(mcsvs[1], 0, 0, &nsinit, wcnext);
 			}
-			if (!epsq.empty())
+			if (!qset_empty(&epsq))
 				epsclosure(mcsvs[1], wcnext);
-			if (mcsvs[1].empty()) {
+			if (qvec_empty(&mcsvs[1])) {
 				if (cowvec_valid(&best))
 					break;
 				if ((flags & MINRX_REG_NOFIRSTBYTES) == 0 && r.firstbytes.has_value())
@@ -1692,17 +1804,18 @@ struct Execute {
 				break;
 			++gen;
 			wcprev = wcnext, off = wconv.off(), wcnext = wconv.nextchr();
-			while (!mcsvs[1].empty()) {
-				auto [n, ns] = mcsvs[1].remove();
-				add(mcsvs[0], n + 1, nodes[n].nstk, ns, wcnext);
+			while (!qvec_empty(&mcsvs[1])) {
+				auto [n, ns] = qvec_remove(&mcsvs[1]);
+				add(mcsvs[0], n + 1, nodes[n].nstk, &ns, wcnext);
+				nstate_destruct(&ns);
 			}
 			if (!cowvec_valid(&best)) {
 				nsinit.boff = off;
-				add(mcsvs[0], 0, 0, nsinit, wcnext);
+				add(mcsvs[0], 0, 0, &nsinit, wcnext);
 			}
-			if (!epsq.empty())
+			if (!qset_empty(&epsq))
 				epsclosure(mcsvs[0], wcnext);
-			if (mcsvs[0].empty()) {
+			if (qvec_empty(&mcsvs[0])) {
 				if (cowvec_valid(&best))
 					break;
 				if ((flags & MINRX_REG_NOFIRSTBYTES) == 0 && r.firstbytes.has_value())
@@ -1710,6 +1823,9 @@ struct Execute {
 			}
 		}
 	exit:
+		nstate_destruct(&nsinit);
+		qvec_destruct(&mcsvs[1]);
+		qvec_destruct(&mcsvs[0]);
 		if (cowvec_valid(&best)) {
 			if (rm) {
 				size_t nsub = MIN(nm, r.nsub);
