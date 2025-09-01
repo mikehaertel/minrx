@@ -506,96 +506,149 @@ qvec_remove(QVec *q)
 
 typedef int32_t WChar;			// because wchar_t may not be 32 bits
 constexpr int32_t WCharMax = 0x10FFFF;	// maximum code point: valid for Unicode and (FIXME!) blithely assumed for non-Unicode
-struct WConv final {
-	enum { End = -1 };
-	enum class Encoding { Byte, MBtoWC, UTF8 };
-	WChar (WConv::*const nextfn)();
-	const char *const bp;
-	const char *const ep;
+enum WConv_Encoding { Byte, MBtoWC, UTF8 };
+enum { End = -1 };
+
+typedef struct WConv WConv;
+struct WConv {
+	WChar (*nextfn)(WConv *);
+	const char *bp;
+	const char *ep;
 	const char *cp;
 	mbstate_t mbs;
-	static WChar (WConv::*const nextfns[])();
-	WConv(const WConv &) = default;
-	WConv(Encoding e, const char *bp, const char *ep)
-	: nextfn(nextfns[(int) e]), bp(bp), ep(ep), cp(bp) {
-		memset(&mbs, 0, sizeof mbs);
-	}
-	WConv(Encoding e, const char *bp): WConv(e, bp, bp + strlen(bp)) { }
-	auto lookahead() const { return WConv(*this).nextchr(); }
-	WChar nextchr() { return (this->*nextfn)(); }
-	WChar nextbyte() { return cp != ep ? (unsigned char) *cp++ : (WChar) End; }
-	WChar nextmbtowc() {
-		wchar_t wct = L'\0';
-		if (cp != ep) {
-			auto n = mbrtowc(&wct, cp, ep - cp, &mbs);
-			if (n == 0 || n == (size_t) -1 || n == (size_t) -2) {
-				if (wct == L'\0')
-					wct = std::numeric_limits<WChar>::min() + (unsigned char) *cp++;
-			} else {
-				cp += n;
-			}
-			return wct;
-		} else {
-			return End;
-		}
-	}
-	WChar nextutf8() {
-		if (cp != ep) {
-			WChar u = (unsigned char) cp[0];
-			if (u < 0x80)
-				return cp += 1, u;
-			if ((u & 0x40) == 0 || cp + 1 == ep)
-			error:
-				return cp += 1, std::numeric_limits<WChar>::min() + u;
-			WChar v = (unsigned char) cp[1];
-			if ((v & 0xC0) != 0x80)
-				goto error;
-			if ((u & 0x20) == 0) {
-				WChar r = ((u & 0x1F) << 6) | (v & 0x3F);
-				if (r < 0x80)
-					goto error;
-				return cp += 2, r;
-			}
-			if (cp + 2 == ep)
-				goto error;
-			WChar w = (unsigned char) cp[2];
-			if ((w & 0xC0) != 0x80)
-				goto error;
-			if ((u & 0x10) == 0) {
-				WChar r = ((u & 0x0F) << 12) | ((v & 0x3F) << 6) | (w & 0x3F);
-				if (r < 0x800)
-					goto error;
-				return cp += 3, r;
-			}
-			if (cp + 3 == ep)
-				goto error;
-			WChar x = (unsigned char) cp[3];
-			if ((x & 0xC0) != 0x80)
-				goto error;
-			if ((u & 0x08) != 0)
-				goto error;
-			WChar r = ((u & 0x07) << 18) | ((v & 0x3F) << 12) | ((w & 0x3F) << 6) | (x & 0x3F);
-			if (r < 0x010000 || r > 0x10FFFF)
-				goto error;
-			return cp += 4, r;
-		} else {
-			return End;
-		}
-	}
-	size_t off() const { return cp - bp; }
-	auto ptr() const { return cp; }
-	auto save() { return cp; }
-	void restore(const char *p) { cp = p; }
 };
 
-WChar (WConv::*const WConv::nextfns[3])() = { &WConv::nextbyte, &WConv::nextmbtowc, &WConv::nextutf8 };
+static WChar
+wconv_nextbyte(WConv *wc)
+{
+	return wc->cp != wc->ep ? (unsigned char) *wc->cp++ : (WChar) End;
+}
+
+static WChar
+wconv_nextmbtowc(WConv *wc)
+{
+	wchar_t wct = L'\0';
+	if (wc->cp != wc->ep) {
+		auto n = mbrtowc(&wct, wc->cp, wc->ep - wc->cp, &wc->mbs);
+		if (n == 0 || n == (size_t) -1 || n == (size_t) -2) {
+			if (wct == L'\0')
+				wct = std::numeric_limits<WChar>::min() + (unsigned char) *wc->cp++;
+		} else {
+			wc->cp += n;
+		}
+		return wct;
+	} else {
+		return End;
+	}
+}
+
+static WChar
+wconv_nextutf8(WConv *wc)
+{
+	if (wc->cp != wc->ep) {
+		WChar u = (unsigned char) wc->cp[0];
+		if (u < 0x80)
+			return wc->cp += 1, u;
+		if ((u & 0x40) == 0 || wc->cp + 1 == wc->ep)
+		error:
+			return wc->cp += 1, std::numeric_limits<WChar>::min() + u;
+		WChar v = (unsigned char) wc->cp[1];
+		if ((v & 0xC0) != 0x80)
+			goto error;
+		if ((u & 0x20) == 0) {
+			WChar r = ((u & 0x1F) << 6) | (v & 0x3F);
+			if (r < 0x80)
+				goto error;
+			return wc->cp += 2, r;
+		}
+		if (wc->cp + 2 == wc->ep)
+			goto error;
+		WChar w = (unsigned char) wc->cp[2];
+		if ((w & 0xC0) != 0x80)
+			goto error;
+		if ((u & 0x10) == 0) {
+			WChar r = ((u & 0x0F) << 12) | ((v & 0x3F) << 6) | (w & 0x3F);
+			if (r < 0x800)
+				goto error;
+			return wc->cp += 3, r;
+		}
+		if (wc->cp + 3 == wc->ep)
+			goto error;
+		WChar x = (unsigned char) wc->cp[3];
+		if ((x & 0xC0) != 0x80)
+			goto error;
+		if ((u & 0x08) != 0)
+			goto error;
+		WChar r = ((u & 0x07) << 18) | ((v & 0x3F) << 12) | ((w & 0x3F) << 6) | (x & 0x3F);
+		if (r < 0x010000 || r > 0x10FFFF)
+			goto error;
+		return wc->cp += 4, r;
+	} else {
+		return End;
+	}
+}
+
+static WChar (*const wconv_nextfns[3])(WConv *) = { &wconv_nextbyte, &wconv_nextmbtowc, &wconv_nextutf8 };
+
+static void
+wconv_construct(WConv *wc, WConv_Encoding e, const char *bp, const char *ep)
+{
+	wc->nextfn = wconv_nextfns[(int) e];
+	wc->bp = bp;
+	wc->ep = ep;
+	wc->cp = bp;
+	memset(&wc->mbs, 0, sizeof wc->mbs);
+}
+
+static void
+wconv_constructz(WConv *wc, WConv_Encoding e, const char *bp)
+{
+	wconv_construct(wc, e, bp, bp + strlen(bp));
+}
+
+static WChar
+wconv_nextchr(WConv *wc)
+{
+	return wc->nextfn(wc);
+}
+
+static WChar
+wconv_lookahead(WConv *wc)
+{
+	auto wconv(*wc);
+	return wconv_nextchr(&wconv);
+}
+
+static size_t
+wconv_off(const WConv *wc)
+{
+	return wc->cp - wc->bp;
+}
+
+static const char *
+wconv_ptr(const WConv *wc)
+{
+	return wc->cp;
+}
+
+static const char *
+wconv_save(const WConv *wc)
+{
+	return wc->cp;
+}
+
+static void
+wconv_restore(WConv *wc, const char *p)
+{
+	wc->cp = p;
+}
 
 struct CSet {
 #ifdef CHARSET
 	charset_t *charset = nullptr;
-	CSet(WConv::Encoding enc) {
+	CSet(WConv_Encoding enc) {
 		int errcode = 0;
-		charset = charset_create(& errcode, MB_CUR_MAX, enc == WConv::Encoding::UTF8);
+		charset = charset_create(& errcode, MB_CUR_MAX, enc == UTF8);
 		// FIXME: Throw error if charset == nullptr
 	}
 	CSet(const CSet &) = delete;
@@ -618,7 +671,7 @@ struct CSet {
 		}
 	};
 	std::set<Range> ranges;
-	CSet(WConv::Encoding) { }
+	CSet(WConv_Encoding) { }
 	CSet &operator|=(const CSet &cs) {
 		for (const auto &e : cs.ranges)
 			set(e.min, e.max);
@@ -684,7 +737,7 @@ struct CSet {
 		return i != ranges.end() && wc >= i->min && wc <= i->max;
 #endif
 	}
-	bool cclass(minrx_regcomp_flags_t flags, WConv::Encoding enc, const std::string &name) {
+	bool cclass(minrx_regcomp_flags_t flags, WConv_Encoding enc, const std::string &name) {
 #ifdef CHARSET
 		int result = charset_add_cclass(charset, name.c_str());
 		if ((flags & MINRX_REG_ICASE) != 0) {
@@ -701,7 +754,7 @@ struct CSet {
 			std::lock_guard<std::mutex> lock(cclmutex);
 			auto i = cclmemo.find(key);
 			if (i == cclmemo.end()) {
-				if (enc == WConv::Encoding::Byte)
+				if (enc == Byte)
 					for (WChar b = 0; b <= 0xFF; ++b) {
 						if (iswctype(btowc(b), wct)) {
 							set(b);
@@ -748,26 +801,26 @@ struct CSet {
 		}
 	}
 #endif
-	minrx_result_t parse(minrx_regcomp_flags_t flags, WConv::Encoding enc, WConv &wconv) {
-		auto wc = wconv.nextchr();
+	minrx_result_t parse(minrx_regcomp_flags_t flags, WConv_Encoding enc, WConv &wconv) {
+		auto wc = wconv_nextchr(&wconv);
 		bool inv = wc == L'^';
 		if (inv)
-			wc = wconv.nextchr();
+			wc = wconv_nextchr(&wconv);
 		for (bool first = true; first || wc != L']'; first = false) {
-			if (wc == WConv::End)
+			if (wc == End)
 				return MINRX_REG_EBRACK;
 			auto wclo = wc, wchi = wc;
-			wc = wconv.nextchr();
+			wc = wconv_nextchr(&wconv);
 			if (wclo == L'\\' && (flags & MINRX_REG_BRACK_ESCAPE) != 0) {
-				if (wc != WConv::End) {
+				if (wc != End) {
 					wclo = wchi = wc;
-					wc = wconv.nextchr();
+					wc = wconv_nextchr(&wconv);
 				} else {
 					return MINRX_REG_EESCAPE;
 				}
 			} else if (wclo == L'[') {
 				if (wc == L'.') {
-					wc = wconv.nextchr();
+					wc = wconv_nextchr(&wconv);
 					wclo = wchi = wc;
 #ifdef CHARSET_NOT_YET
 					int32_t coll[2] = { wc, L'\0' };
@@ -780,27 +833,27 @@ struct CSet {
 						charset_add_collate(charset, coll);	// FIXME: No error checking
 					}
 #endif
-					wc = wconv.nextchr();
-					if (wc != L'.' || (wc = wconv.nextchr()) != L']')
+					wc = wconv_nextchr(&wconv);
+					if (wc != L'.' || (wc = wconv_nextchr(&wconv)) != L']')
 						return MINRX_REG_ECOLLATE;
-					wc = wconv.nextchr();
+					wc = wconv_nextchr(&wconv);
 				} else if (wc == L':') {
-					auto bp = wconv.ptr(), ep = bp;
+					auto bp = wconv_ptr(&wconv), ep = bp;
 					do
-						ep = wconv.ptr(), wc = wconv.nextchr();
-					while (wc != WConv::End && wc != L':');
+						ep = wconv_ptr(&wconv), wc = wconv_nextchr(&wconv);
+					while (wc != End && wc != L':');
 					if (wc != L':')
 						return MINRX_REG_ECTYPE;
-					wc = wconv.nextchr();
+					wc = wconv_nextchr(&wconv);
 					if (wc != L']')
 						return MINRX_REG_ECTYPE;
-					wc = wconv.nextchr();
+					wc = wconv_nextchr(&wconv);
 					auto cclname = std::string(bp, ep);
 					if (cclass(flags, enc, cclname))
 						continue;
 					return MINRX_REG_ECTYPE;
 				} else if (wc == L'=') {
-					wc = wconv.nextchr();
+					wc = wconv_nextchr(&wconv);
 					wclo = wchi = wc;
 #ifdef CHARSET
 					charset_add_equiv(charset, wc);	// FIXME: No error checking
@@ -819,41 +872,41 @@ struct CSet {
 							add_equiv(towlower(wc));
 					}
 #endif
-					wc = wconv.nextchr();
-					if (wc != L'=' || (wc = wconv.nextchr()) != L']')
+					wc = wconv_nextchr(&wconv);
+					if (wc != L'=' || (wc = wconv_nextchr(&wconv)) != L']')
 						return MINRX_REG_ECOLLATE;
 				}
 			}
 			bool range = false;
 			if (wc == L'-') {
-				auto save = wconv.save();
-				wc = wconv.nextchr();
-				if (wc == WConv::End)
+				auto save = wconv_save(&wconv);
+				wc = wconv_nextchr(&wconv);
+				if (wc == End)
 					return MINRX_REG_EBRACK;
 				if (wc != L']') {
 					wchi = wc;
-					wc = wconv.nextchr();
+					wc = wconv_nextchr(&wconv);
 					if (wchi == L'\\' && (flags & MINRX_REG_BRACK_ESCAPE) != 0) {
-						if (wc != WConv::End) {
+						if (wc != End) {
 							wchi = wc;
-							wc = wconv.nextchr();
+							wc = wconv_nextchr(&wconv);
 						} else {
 							return MINRX_REG_EESCAPE;
 						}
 					} else if (wchi == L'[') {
 						if (wc == L'.') {
-							wchi = wconv.nextchr();
-							wc = wconv.nextchr();
-							if (wc != L'.' || (wc = wconv.nextchr()) != L']')
+							wchi = wconv_nextchr(&wconv);
+							wc = wconv_nextchr(&wconv);
+							if (wc != L'.' || (wc = wconv_nextchr(&wconv)) != L']')
 								return MINRX_REG_ECOLLATE;
-							wc = wconv.nextchr();
+							wc = wconv_nextchr(&wconv);
 						} else if (wc == L':' || wc == L'=') {
 							return MINRX_REG_ERANGE; // can't be range endpoint
 						}
 					}
 					range = true;
 				} else {
-					wconv.restore(save);
+					wconv_restore(&wconv, save);
 					wc = L'-';
 				}
 			}
@@ -863,12 +916,12 @@ struct CSet {
 				set(wclo, wchi);
 				if ((flags & MINRX_REG_ICASE) != 0) {
 					for (auto wc = wclo; wc <= wchi; ++wc) {
-						set(enc == WConv::Encoding::Byte ? tolower(wc) : towlower(wc));
-						set(enc == WConv::Encoding::Byte ? toupper(wc) : towupper(wc));
+						set(enc == Byte ? tolower(wc) : towlower(wc));
+						set(enc == Byte ? toupper(wc) : towupper(wc));
 					}
 				}
 			}
-			if (range && wc == L'-' && wconv.lookahead() != L']')
+			if (range && wc == L'-' && wconv_lookahead(&wconv) != L']')
 				return MINRX_REG_ERANGE;
 		}
 		if (inv) {
@@ -890,7 +943,7 @@ struct CSet {
 		return 0xF4;
 	}
 	std::pair<std::optional<const std::array<bool, 256>>, std::optional<char>>
-	firstbytes(WConv::Encoding e) const {
+	firstbytes(WConv_Encoding e) const {
 		std::array<bool, 256> fb = {};
 		auto firstunique = [](const std::array<bool, 256> &fb) -> std::optional<char> {
 			int n = 0, u = -1;
@@ -900,7 +953,7 @@ struct CSet {
 			return n == 1 ? std::optional<char>(u) : std::optional<char>();
 		};
 		switch (e) {
-		case WConv::Encoding::Byte:
+		case Byte:
 #ifdef CHARSET
 		{
 			int errcode = 0;
@@ -918,7 +971,7 @@ struct CSet {
 			}
 #endif
 			return {fb, firstunique(fb)};
-		case WConv::Encoding::UTF8:
+		case UTF8:
 #ifdef CHARSET
 		{
 			int errcode = 0;
@@ -980,7 +1033,7 @@ struct Node {
 };
 
 struct Regexp {
-	WConv::Encoding enc;
+	WConv_Encoding enc;
 	minrx_result_t err;
 	const std::vector<CSet> csets;
 	const std::vector<Node> nodes;
@@ -994,7 +1047,7 @@ struct Regexp {
 
 struct Compile {
 	const minrx_regcomp_flags_t flags;
-	WConv::Encoding enc;
+	WConv_Encoding enc;
 	WConv wconv;
 	WChar wc;
 	std::vector<CSet> csets;
@@ -1006,7 +1059,10 @@ struct Compile {
 	std::map<WChar, unsigned int> icmap;
 	NInt nmin = 0;
 	NInt nsub = 0;
-	Compile(WConv::Encoding e, const char *bp, const char *ep, minrx_regcomp_flags_t flags): flags(flags), enc(e), wconv(e, bp, ep) { wc = wconv.nextchr(); }
+	Compile(WConv_Encoding e, const char *bp, const char *ep, minrx_regcomp_flags_t flags): flags(flags), enc(e) {
+		wconv_construct(&wconv, e, bp, ep);
+		wc = wconv_nextchr(&wconv);
+	}
 	bool num(NInt &n, WChar &wc) {
 		auto satmul = [](NInt x, NInt y) -> NInt {
 			return (x == 0 || y == 0) ? 0 : ((x * y / x == y) ? x * y : -1);
@@ -1018,12 +1074,12 @@ struct Compile {
 			v = satmul(v, 10);
 			if (v == (NInt) -1 || (v += wc - L'0') < (NInt) wc - L'0') {
 				do
-					wc = wconv.nextchr();
+					wc = wconv_nextchr(&wconv);
 				while (wc >= L'0' && wc <= L'9');
 				n = -1;
 				return true;
 			}
-			wc = wconv.nextchr();
+			wc = wconv_nextchr(&wconv);
 		} while (wc >= L'0' && wc <= L'9');
 		n = v;
 		return true;
@@ -1038,7 +1094,7 @@ struct Compile {
 				l.nstk += 1;
 			std::vector<Subexp> alts;
 			while (wc == L'|') {
-				wc = wconv.nextchr();
+				wc = wconv_nextchr(&wconv);
 				alts.push_back(cat(nested, nstk + 1));
 			}
 			auto [rhs, rhmaxstk, rhasmin, err] = alts.back();
@@ -1066,7 +1122,7 @@ struct Compile {
 		auto [lhs, lhmaxstk, lhasmin, err] = rep(nested, nstk);
 		if (err)
 			return {lhs, lhmaxstk, lhasmin, err};
-		while (wc != WConv::End && wc != L'|' && (wc != L')' || !nested)) {
+		while (wc != End && wc != L'|' && (wc != L')' || !nested)) {
 			auto [rhs, rhmaxstk, rhasmin, err] = rep(nested, nstk);
 			if (err)
 				return {rhs, rhmaxstk, rhasmin, err};
@@ -1174,8 +1230,8 @@ struct Compile {
 				goto common;
 			case L'+':
 				infinite = true;
-			common:	if ((flags & MINRX_REG_MINDISABLE) == 0 && (wc = wconv.nextchr()) == L'?')
-					minimal ^= true, wc = wconv.nextchr();
+			common:	if ((flags & MINRX_REG_MINDISABLE) == 0 && (wc = wconv_nextchr(&wconv)) == L'?')
+					minimal ^= true, wc = wconv_nextchr(&wconv);
 				if (hasmin)
 					minraise(lh);
 				lh = mkrep(minimal ? minimize(lh, nstk) : lh, optional, infinite, nstk);
@@ -1187,31 +1243,30 @@ struct Compile {
 				continue;
 			case L'{':
 				if ((flags & MINRX_REG_BRACE_COMPAT) == 0
-				    || (enc == WConv::Encoding::Byte ? isdigit(wconv.lookahead())
-								     : iswdigit(wconv.lookahead())))
+				    || (enc == Byte ? isdigit(wconv_lookahead(&wconv)) : iswdigit(wconv_lookahead(&wconv))))
 				{
-					wc = wconv.nextchr();
-					if (wc == WConv::End)
+					wc = wconv_nextchr(&wconv);
+					if (wc == End)
 						return {{}, 0, false, MINRX_REG_EBRACE};
 					NInt m, n;
 					if (!num(m, wc))
 						return {{}, 0, false, MINRX_REG_BADBR};
 					if (wc == L'}') {
-						if ((flags & MINRX_REG_MINDISABLE) == 0 && (wc = wconv.nextchr()) == L'?')
-							minimal ^= true, wc = wconv.nextchr();
+						if ((flags & MINRX_REG_MINDISABLE) == 0 && (wc = wconv_nextchr(&wconv)) == L'?')
+							minimal ^= true, wc = wconv_nextchr(&wconv);
 						if (hasmin)
 							minraise(lh);
 						lh = mkrep(minimal ? minimize(lh, nstk) : lh, m, m, nstk);
 						goto comout;
 					}
-					if (wc == WConv::End)
+					if (wc == End)
 						return {{}, 0, false, MINRX_REG_EBRACE};
 					if (wc != L',')
 						return {{}, 0, false, MINRX_REG_BADBR};
-					wc = wconv.nextchr();
+					wc = wconv_nextchr(&wconv);
 					if (wc == L'}') {
-						if ((flags & MINRX_REG_MINDISABLE) == 0 && (wc = wconv.nextchr()) == L'?')
-							minimal ^= true, wc = wconv.nextchr();
+						if ((flags & MINRX_REG_MINDISABLE) == 0 && (wc = wconv_nextchr(&wconv)) == L'?')
+							minimal ^= true, wc = wconv_nextchr(&wconv);
 						if (hasmin)
 							minraise(lh);
 						lh = mkrep(minimal ? minimize(lh, nstk) : lh, m, -1, nstk);
@@ -1219,12 +1274,12 @@ struct Compile {
 					}
 					if (!num(n, wc))
 						return {{}, 0, false, MINRX_REG_BADBR};
-					if (wc == WConv::End)
+					if (wc == End)
 						return {{}, 0, false, MINRX_REG_EBRACE};
 					if (wc != L'}')
 						return {{}, 0, false, MINRX_REG_BADBR};
-					if ((flags & MINRX_REG_MINDISABLE) == 0 && (wc = wconv.nextchr()) == L'?')
-						minimal ^= true, wc = wconv.nextchr();
+					if ((flags & MINRX_REG_MINDISABLE) == 0 && (wc = wconv_nextchr(&wconv)) == L'?')
+						minimal ^= true, wc = wconv_nextchr(&wconv);
 					if (hasmin)
 						minraise(lh);
 					lh = mkrep(minimal ? minimize(lh, nstk) : lh, m, n, nstk);
@@ -1247,8 +1302,8 @@ struct Compile {
 			if ((flags & MINRX_REG_ICASE) == 0) {
 				lhs.push_back({(NInt) wc, {0, 0}, nstk});
 			} else {
-				WChar wcl = enc == WConv::Encoding::Byte ? tolower(wc) : towlower(wc);
-				WChar wcu = enc == WConv::Encoding::Byte ? toupper(wc) : towupper(wc);
+				WChar wcl = enc == Byte ? tolower(wc) : towlower(wc);
+				WChar wcu = enc == Byte ? toupper(wc) : towupper(wc);
 				if (wc != wcl || wc != wcu) {
 					auto key = MIN(wc, MIN(wcl, wcu));
 					if (icmap.find(key) == icmap.end()) {
@@ -1263,12 +1318,11 @@ struct Compile {
 					lhs.push_back({(NInt) wc, {0, 0}, nstk});
 				}
 			}
-			wc = wconv.nextchr();
+			wc = wconv_nextchr(&wconv);
 			break;
 		case L'{':
 			if ((flags & MINRX_REG_BRACE_COMPAT) != 0
-			    && (enc == WConv::Encoding::Byte ? !isdigit(wconv.lookahead())
-							     : !iswdigit(wconv.lookahead())))
+			    && (enc == Byte ? !isdigit(wconv_lookahead(&wconv)) : !iswdigit(wconv_lookahead(&wconv))))
 				goto normal;
 			// fall through
 		case L'*':
@@ -1280,7 +1334,7 @@ struct Compile {
 			lhs.push_back({Node::CSet, {csets.size(), 0}, nstk});
 			if (auto err = csets.emplace_back(enc).parse(flags, enc, wconv))
 				return {{}, 0, false, err};
-			wc = wconv.nextchr();
+			wc = wconv_nextchr(&wconv);
 			break;
 		case L'.':
 			if (!dot.has_value()) {
@@ -1292,21 +1346,21 @@ struct Compile {
 			}
 			lhmaxstk = nstk;
 			lhs.push_back({Node::CSet, {*dot, 0}, nstk});
-			wc = wconv.nextchr();
+			wc = wconv_nextchr(&wconv);
 			break;
 		case L'^':
 			lhmaxstk = nstk;
 			lhs.push_back({(flags & MINRX_REG_NEWLINE) == 0 ? Node::ZBOB : Node::ZBOL, {0, 0}, nstk});
-			wc = wconv.nextchr();
+			wc = wconv_nextchr(&wconv);
 			break;
 		case L'$':
 			lhmaxstk = nstk;
 			lhs.push_back({(flags & MINRX_REG_NEWLINE) == 0 ? Node::ZEOB : Node::ZEOL, {0, 0}, nstk});
-			wc = wconv.nextchr();
+			wc = wconv_nextchr(&wconv);
 			break;
 		case L'\\':
 			lhmaxstk = nstk;
-			wc = wconv.nextchr();
+			wc = wconv_nextchr(&wconv);
 			switch (wc) {
 			case L'<':
 				if ((flags & MINRX_REG_EXTENSIONS_BSD) == 0)
@@ -1343,7 +1397,8 @@ struct Compile {
 					goto normal;
 				if (!esc_s.has_value()) {
 					esc_s = csets.size();
-					WConv wc(enc, "[:space:]]");
+					WConv wc;
+					wconv_constructz(&wc, enc, "[:space:]]");
 					csets.emplace_back(enc).parse(flags, enc, wc);
 				}
 				lhs.push_back({Node::CSet, {*esc_s, 0}, nstk});
@@ -1353,7 +1408,8 @@ struct Compile {
 					goto normal;
 				if (!esc_S.has_value()) {
 					esc_S = csets.size();
-					WConv wc(enc, "^[:space:]]");
+					WConv wc;
+					wconv_constructz(&wc, enc, "^[:space:]]");
 					csets.emplace_back(enc).parse(flags, enc, wc);
 				}
 				lhs.push_back({Node::CSet, {*esc_S, 0}, nstk});
@@ -1363,7 +1419,8 @@ struct Compile {
 					goto normal;
 				if (!esc_w.has_value()) {
 					esc_w = csets.size();
-					WConv wc(enc, "[:alnum:]_]");
+					WConv wc;
+					wconv_constructz(&wc, enc, "[:alnum:]_]");
 					csets.emplace_back(enc).parse(flags, enc, wc);
 				}
 				lhs.push_back({Node::CSet, {*esc_w, 0}, nstk});
@@ -1373,22 +1430,23 @@ struct Compile {
 					goto normal;
 				if (!esc_W.has_value()) {
 					esc_W = csets.size();
-					WConv wc(enc, "^[:alnum:]_]");
+					WConv wc;
+					wconv_constructz(&wc, enc, "^[:alnum:]_]");
 					csets.emplace_back(enc).parse(flags, enc, wc);
 				}
 				lhs.push_back({Node::CSet, {*esc_W, 0}, nstk});
 				break;
-			case WConv::End:
+			case End:
 				return {{}, 0, false, MINRX_REG_EESCAPE};
 			default:
 				goto normal;
 			}
-			wc = wconv.nextchr();
+			wc = wconv_nextchr(&wconv);
 			break;
 		case L'(':
 			{
 				NInt n = ++nsub;
-				wc = wconv.nextchr();
+				wc = wconv_nextchr(&wconv);
 				minrx_result_t err;
 				std::tie(lhs, lhmaxstk, lhasmin, err) = alt(true, nstk + 1);
 				if (err)
@@ -1397,7 +1455,7 @@ struct Compile {
 					return {{}, 0, false, MINRX_REG_EPAREN};
 				lhs.push_front({Node::SubL, {n, nsub}, nstk + 1});
 				lhs.push_back({Node::SubR, {n, nsub}, nstk});
-				wc = wconv.nextchr();
+				wc = wconv_nextchr(&wconv);
 			}
 			break;
 		case L')':
@@ -1405,7 +1463,7 @@ struct Compile {
 				goto normal;
 			// fall through
 		case L'|':
-		case WConv::End:
+		case End:
 			lhmaxstk = nstk;
 			break;
 		}
@@ -1478,7 +1536,7 @@ struct Compile {
 		return cs;
 	}
 	std::pair<std::optional<const std::array<bool, 256>>, std::optional<char>>
-	firstbytes(WConv::Encoding e, const std::optional<CSet>& firstcset) {
+	firstbytes(WConv_Encoding e, const std::optional<CSet>& firstcset) {
 		if (!firstcset.has_value())
 			return {};
 		return firstcset->firstbytes(e);
@@ -1505,347 +1563,374 @@ struct Compile {
 	}
 };
 
+static const size_t SizeBits = std::numeric_limits<size_t>::digits;
+
 struct Execute {
-	constexpr static size_t SizeBits = std::numeric_limits<size_t>::digits;
-	const Regexp &r;
-	const minrx_regexec_flags_t flags;
-	const size_t suboff = r.nmin + r.nstk;
-	const size_t minvcnt = (r.nmin + SizeBits - 1) / SizeBits;
-	const size_t minvoff = suboff + 2 * r.nsub;
-	const size_t nestoff = minvoff + minvcnt;
-	size_t gen = 0;
-	size_t off = 0;
+	const Regexp *r;
+	minrx_regexec_flags_t flags;
+	const Node *nodes;
+	size_t suboff;
+	size_t minvcnt;
+	size_t minvoff;
+	size_t nestoff;
+	size_t gen;
+	size_t off;
 	WConv wconv;
-	WChar wcprev = WConv::End;
+	WChar wcprev;
 	COWVec_Allocator allocator;
 	COWVec best;
-	NInt bestmincount = 0; // note mincounts are negated so this means +infinity
+	NInt bestmincount; // note mincounts are negated so this means +infinity
 	QSet epsq;
 	QVec epsv;
-	const Node *nodes = r.nodes.data();
-	Execute(const Regexp &r, minrx_regexec_flags_t flags, const char *bp, const char *ep) : r(r), flags(flags), wconv(r.enc, bp, ep) {
-		if (!qset_construct(&epsq, r.nodes.size()))
-			throw std::bad_alloc();
-		qvec_construct(&epsv, r.nodes.size());
-		cowvec_allocator_construct(&allocator, nestoff + r.nmin);
-		cowvec_construct(&best, nullptr);
-	}
-	~Execute() {
-		qvec_destruct(&epsv);
-		qset_destruct(&epsq);
-		cowvec_destruct(&best);
-		cowvec_allocator_destruct(&allocator);
-	}
-	template <typename... XArgs>
-	INLINE
-	void add(QVec &ncsv, NInt k, NInt nstk, const NState *nsp, WChar wcnext, XArgs... xargs) {
-		const Node &n = nodes[k];
-		if (n.type <= Node::CSet) {
-			if (n.type == (NInt) wcnext || (n.type == Node::CSet && r.csets[n.args[0]].test(wcnext))) {
-				auto [newly, newnsp] = qvec_insert(&ncsv, k, nsp);
-				if (newly)
-					new (newnsp) NState(*nsp), nstate_construct_copy(newnsp, nsp);
-				else if (auto x = nstate_cmp(nsp, newnsp, gen, nstk, xargs...); x > 0 || (x == 0 && minvcnt && cowvec_cmp_from(minvoff, &nsp->substack, &newnsp->substack, minvcnt) > 0))
-					nstate_copy(newnsp, nsp);
-				else
-					return;
-				newnsp->gen = gen;
-				if constexpr (sizeof... (XArgs) > 0) {
-					auto i = nstk - sizeof...(XArgs);
-					(cowvec_put(&newnsp->substack, i++, xargs), ...);
-				}
-			}
-		} else {
-			auto [newly, newnsp] = qvec_insert(&epsv, k, nsp);
+};
+
+static void
+execute_construct(Execute *e, const Regexp *r, minrx_regexec_flags_t flags, const char *bp, const char *ep)
+{
+	e->r = r;
+	e->flags = flags;
+	e->nodes = r->nodes.data();
+	e->suboff = r->nmin + r->nstk;
+	e->minvcnt = (r->nmin + SizeBits - 1) / SizeBits;
+	e->minvoff = e->suboff + 2 * r->nsub;
+	e->nestoff = e->minvoff + e->minvcnt;
+	e->gen = 0;
+	e->off = 0;
+	wconv_construct(&e->wconv, r->enc, bp, ep);
+	e->wcprev = End;
+	cowvec_allocator_construct(&e->allocator, e->nestoff + r->nmin);
+	cowvec_construct(&e->best, nullptr);
+	e->bestmincount = 0;
+	if (!qset_construct(&e->epsq, r->nodes.size()))
+		throw std::bad_alloc();
+	qvec_construct(&e->epsv, r->nodes.size());
+}
+
+static void
+execute_destruct(Execute *e)
+{
+	qvec_destruct(&e->epsv);
+	qset_destruct(&e->epsq);
+	cowvec_destruct(&e->best);
+	cowvec_allocator_destruct(&e->allocator);
+}
+
+template <typename... XArgs>
+INLINE static void
+execute_add(Execute *e, QVec &ncsv, NInt k, NInt nstk, const NState *nsp, WChar wcnext, XArgs... xargs)
+{
+	const Node &n = e->nodes[k];
+	if (n.type <= Node::CSet) {
+		if (n.type == (NInt) wcnext || (n.type == Node::CSet && e->r->csets[n.args[0]].test(wcnext))) {
+			auto [newly, newnsp] = qvec_insert(&ncsv, k, nsp);
 			if (newly)
 				new (newnsp) NState(*nsp), nstate_construct_copy(newnsp, nsp);
-			else if (auto x = nstate_cmp(nsp, newnsp, gen, nstk, xargs...); x > 0 || (x == 0 && minvcnt && cowvec_cmp_from(minvoff, &nsp->substack, &newnsp->substack, minvcnt) > 0))
+			else if (auto x = nstate_cmp(nsp, newnsp, e->gen, nstk, xargs...); x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &newnsp->substack, e->minvcnt) > 0))
 				nstate_copy(newnsp, nsp);
 			else
 				return;
-			newnsp->gen = gen;
+			newnsp->gen = e->gen;
 			if constexpr (sizeof... (XArgs) > 0) {
 				auto i = nstk - sizeof...(XArgs);
 				(cowvec_put(&newnsp->substack, i++, xargs), ...);
 			}
-			qset_insert(&epsq, k);
 		}
+	} else {
+		auto [newly, newnsp] = qvec_insert(&e->epsv, k, nsp);
+		if (newly)
+			new (newnsp) NState(*nsp), nstate_construct_copy(newnsp, nsp);
+		else if (auto x = nstate_cmp(nsp, newnsp, e->gen, nstk, xargs...); x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &newnsp->substack, e->minvcnt) > 0))
+			nstate_copy(newnsp, nsp);
+		else
+			return;
+		newnsp->gen = e->gen;
+		if constexpr (sizeof... (XArgs) > 0) {
+			auto i = nstk - sizeof...(XArgs);
+			(cowvec_put(&newnsp->substack, i++, xargs), ...);
+		}
+		qset_insert(&e->epsq, k);
 	}
-	void epsclosure(QVec &ncsv, WChar wcnext) {
-		auto nodes = this->nodes;
-		auto is_word = r.enc == WConv::Encoding::Byte ? [](WChar b) { return b == '_' || isalnum(b); }
-							      : [](WChar wc) { return wc == L'_' || iswalnum(wc); };
-		do {
-			NInt k = qset_remove(&epsq);
-			NState *nsp = qvec_lookup(&epsv, k);
-			if (cowvec_valid(&best) && nsp->boff > cowvec_get(&best, suboff + 0))
-				continue;
-			const auto &n = nodes[k];
-			auto nstk = n.nstk;
-			switch (n.type) {
-			case Node::Exit:
+}
+
+static void
+execute_epsclosure(Execute *e, QVec &ncsv, WChar wcnext)
+{
+	auto nodes = e->nodes;
+	auto is_word = e->r->enc == Byte ? [](WChar b) { return b == '_' || isalnum(b); }
+					 : [](WChar wc) { return wc == L'_' || iswalnum(wc); };
+	do {
+		NInt k = qset_remove(&e->epsq);
+		NState *nsp = qvec_lookup(&e->epsv, k);
+		if (cowvec_valid(&e->best) && nsp->boff > cowvec_get(&e->best, e->suboff + 0))
+			continue;
+		const auto &n = e->nodes[k];
+		auto nstk = n.nstk;
+		switch (n.type) {
+		case Node::Exit:
+			{
+				auto beg = nsp->boff, end = e->off, mincount = e->r->nmin ? cowvec_get(&nsp->substack, 0) : (NInt) -1;
+				bool minvalid = e->r->nmin ? cowvec_get(&nsp->substack, e->minvoff) < ((size_t) 1 << (SizeBits - 1)) : false;
+				if (!cowvec_valid(&e->best)
+				    || beg < cowvec_get(&e->best, e->suboff + 0)
+				    || (beg == cowvec_get(&e->best, e->suboff + 0) && end > cowvec_get(&e->best, e->suboff + 1) && (!minvalid || mincount >= e->bestmincount)))
 				{
-					auto b = nsp->boff, e = off, mincount = r.nmin ? cowvec_get(&nsp->substack, 0) : (NInt) -1;
-					bool minvalid = r.nmin ? cowvec_get(&nsp->substack, minvoff) < ((size_t) 1 << (SizeBits - 1)) : false;
-					if (!cowvec_valid(&best)
-					    || b < cowvec_get(&best, suboff + 0)
-					    || (b == cowvec_get(&best, suboff + 0) && e > cowvec_get(&best, suboff + 1) && (!minvalid || mincount >= bestmincount)))
-					{
-						cowvec_copy(&best, &nsp->substack);
-						cowvec_put(&best, suboff + 0, b);
-						cowvec_put(&best, suboff + 1, e);
-						if (minvalid)
-							bestmincount = MAX(bestmincount, mincount);
-					}
+					cowvec_copy(&e->best, &nsp->substack);
+					cowvec_put(&e->best, e->suboff + 0, beg);
+					cowvec_put(&e->best, e->suboff + 1, end);
+					if (minvalid)
+						e->bestmincount = MAX(e->bestmincount, mincount);
 				}
-				break;
-			case Node::Fork:
-				{
-					NInt priority = (NInt) -1;
-					do {
-						add(ncsv, k + 1, nstk, nsp, wcnext, priority--);
-						k = k + 1 + nodes[k].args[0];
-					} while (nodes[k].type != Node::Join);
-				}
-				break;
-			case Node::Goto:
-				add(ncsv, k + 1 + n.args[1], nstk, nsp, wcnext);
-				break;
-			case Node::Join:
-				add(ncsv, k + 1, nstk, nsp, wcnext);
-				break;
-			case Node::Loop:
-				add(ncsv, k + 1, nstk, nsp, wcnext, (NInt) off, (NInt) -1, (NInt) off);
-				if (n.args[1])
-					add(ncsv, k + 1 + n.args[0], nstk, nsp, wcnext, (NInt) off, (NInt) 0, (NInt) off);
-				break;
-			case Node::MinB:
-				{
-					size_t w = n.args[0] / SizeBits;
-					size_t b = (size_t) 1 << (SizeBits - 1 - n.args[0] % SizeBits);
-					NState nscopy;
-					nstate_construct_copy(&nscopy, nsp);
-					b |= -b;
-					auto x = cowvec_get(&nscopy.substack, minvoff + w);
-					do {
-						if ((x & b) != 0)
-							cowvec_put(&nscopy.substack, minvoff + w, x & ~b);
-						b = -1;
-					} while ( w-- > 0);
-					add(ncsv, k + 1, nstk, &nscopy, wcnext);
-					nstate_destruct(&nscopy);
-				}
-				break;
-			case Node::MinL:
-				add(ncsv, k + 1, nstk, nsp, wcnext, off);
-				break;
-			case Node::MinR:
-				{
-					NState nscopy;
-					nstate_construct_copy(&nscopy, nsp);
-					auto mininc = off - cowvec_get(&nscopy.substack, n.nstk);
-					size_t oldlen = (size_t) -1 - cowvec_get(&nscopy.substack, n.args[0]);
-					mininc -= cowvec_get(&nscopy.substack, nestoff + n.args[0]);
-					cowvec_put(&nscopy.substack, nestoff + n.args[0], 0);
-					cowvec_put(&nscopy.substack, n.args[0], (size_t) -1 - (oldlen + mininc));
-					for (auto i = n.args[0]; i-- > 0; ) {
-						oldlen = (size_t) -1 - cowvec_get(&nscopy.substack, i);
-						cowvec_put(&nscopy.substack, i, -1 - (oldlen + mininc));
-						cowvec_put(&nscopy.substack, nestoff + i, cowvec_get(&nscopy.substack, nestoff + i) + mininc);
-					}
-					add(ncsv, k + 1, nstk, &nscopy, wcnext);
-					nstate_destruct(&nscopy);
-				}
-				break;
-			case Node::Next:
-				add(ncsv, k + 1, nstk, nsp, wcnext);
-				if (n.args[1] && off > cowvec_get(&nsp->substack, nstk + 3 - 1))
-					add(ncsv, k - n.args[0], nstk + 3, nsp, wcnext, cowvec_get(&nsp->substack, nstk), cowvec_get(&nsp->substack, nstk + 1) - 1, (NInt) off);
-				break;
-			case Node::Skip:
-				add(ncsv, k + 1, nstk, nsp, wcnext, (NInt) off, (NInt) 1 ^ n.args[1]);
-				add(ncsv, k + 1 + n.args[0], nstk, nsp, wcnext, (NInt) off, (NInt) 0 ^ n.args[1]);
-				break;
-			case Node::SubL:
-				{
-					NState nscopy;
-					nstate_construct_copy(&nscopy, nsp);
-					cowvec_put(&nscopy.substack, nstk - 1, off);
-					if (n.args[0] != (NInt) -1 && (flags & MINRX_REG_NOSUBRESET) == 0)
-						for (auto i = n.args[0] + 1; i <= n.args[1]; ++i) {
-							cowvec_put(&nscopy.substack, suboff + i * 2, -1);
-							cowvec_put(&nscopy.substack, suboff + i * 2 + 1, -1);
-						}
-					add(ncsv, k + 1, nstk, &nscopy, wcnext);
-					nstate_destruct(&nscopy);
-				}
-				break;
-			case Node::SubR:
-				if (n.args[0] != (NInt) -1 && ((flags & MINRX_REG_FIRSTSUB) == 0 || cowvec_get(&nsp->substack, suboff + n.args[0] * 2) == (NInt) -1)) {
-					NState nscopy;
-					nstate_construct_copy(&nscopy, nsp);
-					cowvec_put(&nscopy.substack, suboff + n.args[0] * 2 + 0, cowvec_get(&nsp->substack, nstk));
-					cowvec_put(&nscopy.substack, suboff + n.args[0] * 2 + 1, off);
-					add(ncsv, k + 1, nstk, &nscopy, wcnext);
-					nstate_destruct(&nscopy);
-				} else {
-					add(ncsv, k + 1, nstk, nsp, wcnext);
-				}
-				break;
-			case Node::ZBOB:
-				if (off == 0 && (flags & MINRX_REG_NOTBOL) == 0)
-					add(ncsv, k + 1, nstk, nsp, wcnext);
-				break;
-			case Node::ZEOB:
-				if (wcnext == WConv::End && (flags & MINRX_REG_NOTEOL) == 0)
-					add(ncsv, k + 1, nstk, nsp, wcnext);
-				break;
-			case Node::ZBOL:
-				if (((off == 0 && (flags & MINRX_REG_NOTBOL) == 0)) || wcprev == L'\n')
-					add(ncsv, k + 1, nstk, nsp, wcnext);
-				break;
-			case Node::ZEOL:
-				if (((wcnext == WConv::End && (flags & MINRX_REG_NOTEOL) == 0)) || wcnext == L'\n')
-					add(ncsv, k + 1, nstk, nsp, wcnext);
-				break;
-			case Node::ZBOW:
-				if ((off == 0 || !is_word(wcprev)) && (wcnext != WConv::End && is_word(wcnext)))
-					add(ncsv, k + 1, nstk, nsp, wcnext);
-				break;
-			case Node::ZEOW:
-				if ((off != 0 && is_word(wcprev)) && (wcnext == WConv::End || !is_word(wcnext)))
-					add(ncsv, k + 1, nstk, nsp, wcnext);
-				break;
-			case Node::ZXOW:
-				if (   ((off == 0 || !is_word(wcprev)) && (wcnext != WConv::End && is_word(wcnext)))
-				    || ((off != 0 && is_word(wcprev)) && (wcnext == WConv::End || !is_word(wcnext))))
-					add(ncsv, k + 1, nstk, nsp, wcnext);
-				break;
-			case Node::ZNWB:
-				if (   (off == 0 && wcnext == WConv::End)
-				    || (off == 0 && wcnext != WConv::End && !is_word(wcnext))
-				    || (off != 0 && !is_word(wcprev) && wcnext == WConv::End)
-				    || (off != 0 && wcnext != WConv::End && is_word(wcprev) == is_word(wcnext)))
-					add(ncsv, k + 1, nstk, nsp, wcnext);
-				break;
-			default:
-				abort();
-				break;
 			}
-		} while (!qset_empty(&epsq));
-	}
-	int execute(size_t nm, minrx_regmatch_t *rm) {
-		QVec mcsvs[2];
-		qvec_construct(&mcsvs[0], r.nodes.size());
-		qvec_construct(&mcsvs[1], r.nodes.size());
-		off = wconv.off();
-		auto wcnext = wconv.nextchr();
-		if ((flags & MINRX_REG_RESUME) != 0 && rm && rm[0].rm_eo > 0)
-			while (wcnext != WConv::End && (ptrdiff_t) off < rm[0].rm_eo)
-				wcprev = wcnext, off = wconv.off(), wcnext = wconv.nextchr();
-		NState nsinit;
-		nstate_construct(&nsinit, &allocator);
-		if ((flags & MINRX_REG_NOFIRSTBYTES) == 0 && r.firstbytes.has_value() && !r.firstcset->test(wcnext)) {
-		zoom:
-			auto cp = wconv.cp, ep = wconv.ep;
-			if (r.firstunique.has_value()) {
-				cp = (const char *) memchr(cp, *r.firstunique, ep - cp);
-				if (cp == nullptr)
-					goto exit;
+			break;
+		case Node::Fork:
+			{
+				NInt priority = (NInt) -1;
+				do {
+					execute_add(e, ncsv, k + 1, nstk, nsp, wcnext, priority--);
+					k = k + 1 + nodes[k].args[0];
+				} while (nodes[k].type != Node::Join);
+			}
+			break;
+		case Node::Goto:
+			execute_add(e, ncsv, k + 1 + n.args[1], nstk, nsp, wcnext);
+			break;
+		case Node::Join:
+			execute_add(e, ncsv, k + 1, nstk, nsp, wcnext);
+			break;
+		case Node::Loop:
+			execute_add(e, ncsv, k + 1, nstk, nsp, wcnext, (NInt) e->off, (NInt) -1, (NInt) e->off);
+			if (n.args[1])
+				execute_add(e, ncsv, k + 1 + n.args[0], nstk, nsp, wcnext, (NInt) e->off, (NInt) 0, (NInt) e->off);
+			break;
+		case Node::MinB:
+			{
+				size_t w = n.args[0] / SizeBits;
+				size_t b = (size_t) 1 << (SizeBits - 1 - n.args[0] % SizeBits);
+				NState nscopy;
+				nstate_construct_copy(&nscopy, nsp);
+				b |= -b;
+				auto x = cowvec_get(&nscopy.substack, e->minvoff + w);
+				do {
+					if ((x & b) != 0)
+						cowvec_put(&nscopy.substack, e->minvoff + w, x & ~b);
+					b = -1;
+				} while ( w-- > 0);
+				execute_add(e, ncsv, k + 1, nstk, &nscopy, wcnext);
+				nstate_destruct(&nscopy);
+			}
+			break;
+		case Node::MinL:
+			execute_add(e, ncsv, k + 1, nstk, nsp, wcnext, e->off);
+			break;
+		case Node::MinR:
+			{
+				NState nscopy;
+				nstate_construct_copy(&nscopy, nsp);
+				auto mininc = e->off - cowvec_get(&nscopy.substack, n.nstk);
+				size_t oldlen = (size_t) -1 - cowvec_get(&nscopy.substack, n.args[0]);
+				mininc -= cowvec_get(&nscopy.substack, e->nestoff + n.args[0]);
+				cowvec_put(&nscopy.substack, e->nestoff + n.args[0], 0);
+				cowvec_put(&nscopy.substack, n.args[0], (size_t) -1 - (oldlen + mininc));
+				for (auto i = n.args[0]; i-- > 0; ) {
+					oldlen = (size_t) -1 - cowvec_get(&nscopy.substack, i);
+					cowvec_put(&nscopy.substack, i, -1 - (oldlen + mininc));
+					cowvec_put(&nscopy.substack, e->nestoff + i, cowvec_get(&nscopy.substack, e->nestoff + i) + mininc);
+				}
+				execute_add(e, ncsv, k + 1, nstk, &nscopy, wcnext);
+				nstate_destruct(&nscopy);
+			}
+			break;
+		case Node::Next:
+			execute_add(e, ncsv, k + 1, nstk, nsp, wcnext);
+			if (n.args[1] && e->off > cowvec_get(&nsp->substack, nstk + 3 - 1))
+				execute_add(e, ncsv, k - n.args[0], nstk + 3, nsp, wcnext, cowvec_get(&nsp->substack, nstk), cowvec_get(&nsp->substack, nstk + 1) - 1, (NInt) e->off);
+			break;
+		case Node::Skip:
+			execute_add(e, ncsv, k + 1, nstk, nsp, wcnext, (NInt) e->off, (NInt) 1 ^ n.args[1]);
+			execute_add(e, ncsv, k + 1 + n.args[0], nstk, nsp, wcnext, (NInt) e->off, (NInt) 0 ^ n.args[1]);
+			break;
+		case Node::SubL:
+			{
+				NState nscopy;
+				nstate_construct_copy(&nscopy, nsp);
+				cowvec_put(&nscopy.substack, nstk - 1, e->off);
+				if (n.args[0] != (NInt) -1 && (e->flags & MINRX_REG_NOSUBRESET) == 0)
+					for (auto i = n.args[0] + 1; i <= n.args[1]; ++i) {
+						cowvec_put(&nscopy.substack, e->suboff + i * 2, -1);
+						cowvec_put(&nscopy.substack, e->suboff + i * 2 + 1, -1);
+					}
+				execute_add(e, ncsv, k + 1, nstk, &nscopy, wcnext);
+				nstate_destruct(&nscopy);
+			}
+			break;
+		case Node::SubR:
+			if (n.args[0] != (NInt) -1 && ((e->flags & MINRX_REG_FIRSTSUB) == 0 || cowvec_get(&nsp->substack, e->suboff + n.args[0] * 2) == (NInt) -1)) {
+				NState nscopy;
+				nstate_construct_copy(&nscopy, nsp);
+				cowvec_put(&nscopy.substack, e->suboff + n.args[0] * 2 + 0, cowvec_get(&nsp->substack, nstk));
+				cowvec_put(&nscopy.substack, e->suboff + n.args[0] * 2 + 1, e->off);
+				execute_add(e, ncsv, k + 1, nstk, &nscopy, wcnext);
+				nstate_destruct(&nscopy);
 			} else {
-				auto firstbytes = *r.firstbytes;
-				while (cp != ep && !firstbytes[(unsigned char) *cp])
-					++cp;
-				if (cp == ep)
-					goto exit;
+				execute_add(e, ncsv, k + 1, nstk, nsp, wcnext);
 			}
-			if (cp != wconv.cp) {
-				if (r.enc == WConv::Encoding::UTF8) {
-					auto bp = cp;
-					while (bp != wconv.cp && cp - bp < 8 && (unsigned char) *--bp >= 0x80)
-						;
-					wconv.cp = (unsigned char) *bp >= 0x80 ? cp - 1 : bp;
-				} else {
-					wconv.cp = cp - 1;
-				}
-				wcnext = wconv.nextchr();
-			}
-			++gen, wcprev = wcnext, off = wconv.off(), wcnext = wconv.nextchr();
+			break;
+		case Node::ZBOB:
+			if (e->off == 0 && (e->flags & MINRX_REG_NOTBOL) == 0)
+				execute_add(e, ncsv, k + 1, nstk, nsp, wcnext);
+			break;
+		case Node::ZEOB:
+			if (wcnext == End && (e->flags & MINRX_REG_NOTEOL) == 0)
+				execute_add(e, ncsv, k + 1, nstk, nsp, wcnext);
+			break;
+		case Node::ZBOL:
+			if (((e->off == 0 && (e->flags & MINRX_REG_NOTBOL) == 0)) || e->wcprev == L'\n')
+				execute_add(e, ncsv, k + 1, nstk, nsp, wcnext);
+			break;
+		case Node::ZEOL:
+			if (((wcnext == End && (e->flags & MINRX_REG_NOTEOL) == 0)) || wcnext == L'\n')
+				execute_add(e, ncsv, k + 1, nstk, nsp, wcnext);
+			break;
+		case Node::ZBOW:
+			if ((e->off == 0 || !is_word(e->wcprev)) && (wcnext != End && is_word(wcnext)))
+				execute_add(e, ncsv, k + 1, nstk, nsp, wcnext);
+			break;
+		case Node::ZEOW:
+			if ((e->off != 0 && is_word(e->wcprev)) && (wcnext == End || !is_word(wcnext)))
+				execute_add(e, ncsv, k + 1, nstk, nsp, wcnext);
+			break;
+		case Node::ZXOW:
+			if (   ((e->off == 0 || !is_word(e->wcprev)) && (wcnext != End && is_word(wcnext)))
+			    || ((e->off != 0 && is_word(e->wcprev)) && (wcnext == End || !is_word(wcnext))))
+				execute_add(e, ncsv, k + 1, nstk, nsp, wcnext);
+			break;
+		case Node::ZNWB:
+			if (   (e->off == 0 && wcnext == End)
+			    || (e->off == 0 && wcnext != End && !is_word(wcnext))
+			    || (e->off != 0 && !is_word(e->wcprev) && wcnext == End)
+			    || (e->off != 0 && wcnext != End && is_word(e->wcprev) == is_word(wcnext)))
+				execute_add(e, ncsv, k + 1, nstk, nsp, wcnext);
+			break;
+		default:
+			abort();
+			break;
 		}
-		nsinit.boff = off;
-		for (size_t i = 0; i < r.nmin; ++i)
-			cowvec_put(&nsinit.substack, nestoff + i, 0);
-		add(mcsvs[0], 0, 0, &nsinit, wcnext);
-		if (!qset_empty(&epsq))
-			epsclosure(mcsvs[0], wcnext);
-		for (;;) { // unrolled to ping-pong roles of mcsvs[0]/[1]
-			if (wcnext == WConv::End)
-				break;
-			++gen;
-			wcprev = wcnext, off = wconv.off(), wcnext = wconv.nextchr();
-			while (!qvec_empty(&mcsvs[0])) {
-				auto [n, ns] = qvec_remove(&mcsvs[0]);
-				add(mcsvs[1], n + 1, nodes[n].nstk, &ns, wcnext);
-				nstate_destruct(&ns);
-			}
-			if (!cowvec_valid(&best)) {
-				nsinit.boff = off;
-				add(mcsvs[1], 0, 0, &nsinit, wcnext);
-			}
-			if (!qset_empty(&epsq))
-				epsclosure(mcsvs[1], wcnext);
-			if (qvec_empty(&mcsvs[1])) {
-				if (cowvec_valid(&best))
-					break;
-				if ((flags & MINRX_REG_NOFIRSTBYTES) == 0 && r.firstbytes.has_value())
-					goto zoom;
-			}
-			if (wcnext == WConv::End)
-				break;
-			++gen;
-			wcprev = wcnext, off = wconv.off(), wcnext = wconv.nextchr();
-			while (!qvec_empty(&mcsvs[1])) {
-				auto [n, ns] = qvec_remove(&mcsvs[1]);
-				add(mcsvs[0], n + 1, nodes[n].nstk, &ns, wcnext);
-				nstate_destruct(&ns);
-			}
-			if (!cowvec_valid(&best)) {
-				nsinit.boff = off;
-				add(mcsvs[0], 0, 0, &nsinit, wcnext);
-			}
-			if (!qset_empty(&epsq))
-				epsclosure(mcsvs[0], wcnext);
-			if (qvec_empty(&mcsvs[0])) {
-				if (cowvec_valid(&best))
-					break;
-				if ((flags & MINRX_REG_NOFIRSTBYTES) == 0 && r.firstbytes.has_value())
-					goto zoom;
-			}
-		}
-	exit:
-		nstate_destruct(&nsinit);
-		qvec_destruct(&mcsvs[1]);
-		qvec_destruct(&mcsvs[0]);
-		if (cowvec_valid(&best)) {
-			if (rm) {
-				size_t nsub = MIN(nm, r.nsub);
-				size_t i;
-				for (i = 0; i < nsub; ++i) {
-					rm[i].rm_so = cowvec_get(&best, suboff + i * 2);
-					rm[i].rm_eo = cowvec_get(&best, suboff + i * 2 + 1);
-				}
-				for (; i < nm; ++i)
-					rm[i].rm_so = rm[i].rm_eo = -1;
-			}
-			return 0;
+	} while (!qset_empty(&e->epsq));
+}
+
+static int
+execute(Execute *e, size_t nm, minrx_regmatch_t *rm)
+{
+	QVec mcsvs[2];
+	qvec_construct(&mcsvs[0], e->r->nodes.size());
+	qvec_construct(&mcsvs[1], e->r->nodes.size());
+	e->off = wconv_off(&e->wconv);
+	auto wcnext = wconv_nextchr(&e->wconv);
+	if ((e->flags & MINRX_REG_RESUME) != 0 && rm && rm[0].rm_eo > 0)
+		while (wcnext != End && (ptrdiff_t) e->off < rm[0].rm_eo)
+			e->wcprev = wcnext, e->off = wconv_off(&e->wconv), wcnext = wconv_nextchr(&e->wconv);
+	NState nsinit;
+	nstate_construct(&nsinit, &e->allocator);
+	if ((e->flags & MINRX_REG_NOFIRSTBYTES) == 0 && e->r->firstbytes.has_value() && !e->r->firstcset->test(wcnext)) {
+	zoom:
+		auto cp = e->wconv.cp, ep = e->wconv.ep;
+		if (e->r->firstunique.has_value()) {
+			cp = (const char *) memchr(cp, *e->r->firstunique, ep - cp);
+			if (cp == nullptr)
+				goto exit;
 		} else {
-			if (rm)
-				for (size_t i = 0; i < nm; ++i)
-					rm[i].rm_so = rm[i].rm_eo = -1;
-			return MINRX_REG_NOMATCH;
+			auto firstbytes = *e->r->firstbytes;
+			while (cp != ep && !firstbytes[(unsigned char) *cp])
+				++cp;
+			if (cp == ep)
+				goto exit;
+		}
+		if (cp != e->wconv.cp) {
+			if (e->r->enc == UTF8) {
+				auto bp = cp;
+				while (bp != e->wconv.cp && cp - bp < 8 && (unsigned char) *--bp >= 0x80)
+					;
+				e->wconv.cp = (unsigned char) *bp >= 0x80 ? cp - 1 : bp;
+			} else {
+				e->wconv.cp = cp - 1;
+			}
+			wcnext = wconv_nextchr(&e->wconv);
+		}
+		++e->gen, e->wcprev = wcnext, e->off = wconv_off(&e->wconv), wcnext = wconv_nextchr(&e->wconv);
+	}
+	nsinit.boff = e->off;
+	for (size_t i = 0; i < e->r->nmin; ++i)
+		cowvec_put(&nsinit.substack, e->nestoff + i, 0);
+	execute_add(e, mcsvs[0], 0, 0, &nsinit, wcnext);
+	if (!qset_empty(&e->epsq))
+		execute_epsclosure(e, mcsvs[0], wcnext);
+	for (;;) { // unrolled to ping-pong roles of mcsvs[0]/[1]
+		if (wcnext == End)
+			break;
+		++e->gen;
+		e->wcprev = wcnext, e->off = wconv_off(&e->wconv), wcnext = wconv_nextchr(&e->wconv);
+		while (!qvec_empty(&mcsvs[0])) {
+			auto [n, ns] = qvec_remove(&mcsvs[0]);
+			execute_add(e, mcsvs[1], n + 1, e->nodes[n].nstk, &ns, wcnext);
+			nstate_destruct(&ns);
+		}
+		if (!cowvec_valid(&e->best)) {
+			nsinit.boff = e->off;
+			execute_add(e, mcsvs[1], 0, 0, &nsinit, wcnext);
+		}
+		if (!qset_empty(&e->epsq))
+			execute_epsclosure(e, mcsvs[1], wcnext);
+		if (qvec_empty(&mcsvs[1])) {
+			if (cowvec_valid(&e->best))
+				break;
+			if ((e->flags & MINRX_REG_NOFIRSTBYTES) == 0 && e->r->firstbytes.has_value())
+				goto zoom;
+		}
+		if (wcnext == End)
+			break;
+		++e->gen;
+		e->wcprev = wcnext, e->off = wconv_off(&e->wconv), wcnext = wconv_nextchr(&e->wconv);
+		while (!qvec_empty(&mcsvs[1])) {
+			auto [n, ns] = qvec_remove(&mcsvs[1]);
+			execute_add(e, mcsvs[0], n + 1, e->nodes[n].nstk, &ns, wcnext);
+			nstate_destruct(&ns);
+		}
+		if (!cowvec_valid(&e->best)) {
+			nsinit.boff = e->off;
+			execute_add(e, mcsvs[0], 0, 0, &nsinit, wcnext);
+		}
+		if (!qset_empty(&e->epsq))
+			execute_epsclosure(e, mcsvs[0], wcnext);
+		if (qvec_empty(&mcsvs[0])) {
+			if (cowvec_valid(&e->best))
+				break;
+			if ((e->flags & MINRX_REG_NOFIRSTBYTES) == 0 && e->r->firstbytes.has_value())
+				goto zoom;
 		}
 	}
-};
+exit:
+	nstate_destruct(&nsinit);
+	qvec_destruct(&mcsvs[1]);
+	qvec_destruct(&mcsvs[0]);
+	if (cowvec_valid(&e->best)) {
+		if (rm) {
+			size_t nsub = MIN(nm, e->r->nsub);
+			size_t i;
+			for (i = 0; i < nsub; ++i) {
+				rm[i].rm_so = cowvec_get(&e->best, e->suboff + i * 2);
+				rm[i].rm_eo = cowvec_get(&e->best, e->suboff + i * 2 + 1);
+			}
+			for (; i < nm; ++i)
+				rm[i].rm_so = rm[i].rm_eo = -1;
+		}
+		return 0;
+	} else {
+		if (rm)
+			for (size_t i = 0; i < nm; ++i)
+				rm[i].rm_so = rm[i].rm_eo = -1;
+		return MINRX_REG_NOMATCH;
+	}
+}
 
 }
 
@@ -1864,12 +1949,12 @@ minrx_regexec(minrx_regex_t *rx, const char *s, size_t nm, minrx_regmatch_t *rm,
 int
 minrx_regncomp(minrx_regex_t *rx, size_t ns, const char *s, int flags)
 {
-	auto enc = MinRX::WConv::Encoding::MBtoWC;
+	auto enc = MinRX::MBtoWC;
 	auto loc = setlocale(LC_CTYPE, nullptr);
 	if ((strcmp(loc, "C") == 0 || (flags & MINRX_REG_NATIVE1B) != 0) && MB_CUR_MAX == 1)
-		enc = MinRX::WConv::Encoding::Byte;
+		enc = MinRX::Byte;
 	else if (strcmp(nl_langinfo(CODESET), "UTF-8") == 0)
-		enc = MinRX::WConv::Encoding::UTF8;
+		enc = MinRX::UTF8;
 	auto r = MinRX::Compile(enc, s, s + ns, (minrx_regcomp_flags_t) flags).compile();
 	rx->re_regexp = r;
 	rx->re_nsub = r->nsub - 1;
@@ -1881,7 +1966,11 @@ int
 minrx_regnexec(minrx_regex_t *rx, size_t ns, const char *s, size_t nm, minrx_regmatch_t *rm, int flags)
 {
 	MinRX::Regexp *r = reinterpret_cast<MinRX::Regexp *>(rx->re_regexp);
-	return MinRX::Execute(*r, (minrx_regexec_flags_t) flags, s, s + ns).execute(nm, rm);
+	MinRX::Execute e;
+	MinRX::execute_construct(&e, r, (minrx_regexec_flags_t) flags, s, s + ns);
+	int ret = MinRX::execute(&e, nm, rm);
+	MinRX::execute_destruct(&e);
+	return ret;
 }
 
 void
