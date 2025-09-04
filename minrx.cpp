@@ -81,10 +81,14 @@
 #include "minrx.h"
 
 #ifdef __GNUC__
-#define INLINE __attribute__((__always_inline__)) inline
-#else
-#define INLINE inline
+#define inline __attribute__((__always_inline__)) inline
 #endif
+
+static inline
+bool IsDigit(int32_t wc)
+{
+	return wc >= L'0' && wc <= L'9';
+}
 
 // FIXME: expand compiler support beyond clang and gcc
 #if UINT_MAX == 18446744073709551615U
@@ -1243,7 +1247,7 @@ struct Compile {
 				continue;
 			case L'{':
 				if ((flags & MINRX_REG_BRACE_COMPAT) == 0
-				    || (enc == Byte ? isdigit(wconv_lookahead(&wconv)) : iswdigit(wconv_lookahead(&wconv))))
+				    || (enc == Byte ? isdigit(wconv_lookahead(&wconv)) : IsDigit(wconv_lookahead(&wconv))))
 				{
 					wc = wconv_nextchr(&wconv);
 					if (wc == End)
@@ -1322,7 +1326,7 @@ struct Compile {
 			break;
 		case L'{':
 			if ((flags & MINRX_REG_BRACE_COMPAT) != 0
-			    && (enc == Byte ? !isdigit(wconv_lookahead(&wconv)) : !iswdigit(wconv_lookahead(&wconv))))
+			    && (enc == Byte ? !isdigit(wconv_lookahead(&wconv)) : !IsDigit(wconv_lookahead(&wconv))))
 				goto normal;
 			// fall through
 		case L'*':
@@ -1616,7 +1620,7 @@ execute_destruct(Execute *e)
 }
 
 template <typename... XArgs>
-INLINE static void
+inline static void
 execute_add(Execute *e, QVec &ncsv, NInt k, NInt nstk, const NState *nsp, WChar wcnext, XArgs... xargs)
 {
 	const Node &n = e->nodes[k];
@@ -1951,7 +1955,8 @@ minrx_regncomp(minrx_regex_t *rx, size_t ns, const char *s, int flags)
 {
 	auto enc = MinRX::MBtoWC;
 	auto loc = setlocale(LC_CTYPE, nullptr);
-	if ((strcmp(loc, "C") == 0 || (flags & MINRX_REG_NATIVE1B) != 0) && MB_CUR_MAX == 1)
+	if ((strcmp(loc, "C") == 0 || strcmp(loc, "POSIX") == 0 ||
+		(flags & MINRX_REG_NATIVE1B) != 0) && MB_CUR_MAX == 1)
 		enc = MinRX::Byte;
 	else if (strcmp(nl_langinfo(CODESET), "UTF-8") == 0)
 		enc = MinRX::UTF8;
