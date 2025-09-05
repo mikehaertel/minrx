@@ -90,6 +90,7 @@ bool IsDigit(int32_t wc)
 	return wc >= L'0' && wc <= L'9';
 }
 
+#if 0
 // FIXME: expand compiler support beyond clang and gcc
 #if UINT_MAX == 18446744073709551615U
 #define ctz __builtin_ctz
@@ -99,6 +100,48 @@ bool IsDigit(int32_t wc)
 #define ctz __builtin_ctzll
 #else
 #error "can't figure out how to count trailing zeroes for 64-bit operands"
+#endif
+#else
+// ctz --- count trailing zeros. dead simple table driven version
+
+int
+ctz(uint64_t val)
+{
+	static char table[] = {
+		8, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 4, 0,
+		1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 5, 0, 1, 0,
+		2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 4, 0, 1, 0, 2, 0,
+		1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 6, 0, 1, 0, 2, 0, 1, 0,
+		3, 0, 1, 0, 2, 0, 1, 0, 4, 0, 1, 0, 2, 0, 1, 0, 3, 0,
+		1, 0, 2, 0, 1, 0, 5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0,
+		2, 0, 1, 0, 4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0,
+		1, 0, 7, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+		4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 5, 0,
+		1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 4, 0, 1, 0,
+		2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 6, 0, 1, 0, 2, 0, 1,
+		0, 3, 0, 1, 0, 2, 0, 1, 0, 4, 0, 1, 0, 2, 0, 1, 0, 3, 0,
+		1, 0, 2, 0, 1, 0, 5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2,
+		0, 1, 0, 4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+	};
+
+	if (val == 0)
+		return 64;
+
+	int count = 0;
+	for (; val != 0; val >>= 8) {
+		uint32_t x = val & 0xFF;
+
+		if (x == 0) {
+			count += 8;
+			continue;
+		}
+		
+		count += table[x];
+		break;
+	}
+
+	return count;
+}
 #endif
 
 #define MAX(A, B) ((A) >= (B) ? (A) : (B))
