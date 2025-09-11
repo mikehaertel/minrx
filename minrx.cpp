@@ -90,7 +90,7 @@ bool IsDigit(int32_t wc)
 	return wc >= L'0' && wc <= L'9';
 }
 
-#if 0
+#ifdef __GNUC__
 // FIXME: expand compiler support beyond clang and gcc
 #if UINT_MAX == 18446744073709551615U
 #define ctz __builtin_ctz
@@ -108,20 +108,22 @@ int
 ctz(uint64_t val)
 {
 	static char table[] = {
-		8, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 4, 0,
-		1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 5, 0, 1, 0,
-		2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 4, 0, 1, 0, 2, 0,
-		1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 6, 0, 1, 0, 2, 0, 1, 0,
-		3, 0, 1, 0, 2, 0, 1, 0, 4, 0, 1, 0, 2, 0, 1, 0, 3, 0,
-		1, 0, 2, 0, 1, 0, 5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0,
-		2, 0, 1, 0, 4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0,
-		1, 0, 7, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-		4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 5, 0,
-		1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 4, 0, 1, 0,
-		2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 6, 0, 1, 0, 2, 0, 1,
-		0, 3, 0, 1, 0, 2, 0, 1, 0, 4, 0, 1, 0, 2, 0, 1, 0, 3, 0,
-		1, 0, 2, 0, 1, 0, 5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2,
-		0, 1, 0, 4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+		8, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+		4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+		5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+		4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+		6, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+		4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+		5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+		4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+		7, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+		4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+		5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+		4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+		6, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+		4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+		5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
+		4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
 	};
 
 	if (val == 0)
@@ -366,7 +368,7 @@ bit(size_t k)
 static bool
 qset_empty(const QSet *q)
 {
-	return !q->bits0;
+	return q->bits0 == 0;
 }
 
 static bool
@@ -375,7 +377,7 @@ qset_contains(const QSet *q, size_t k)
 	int i = 0, s = 6 * q->depth;
 	size_t j = 0;
 	while (i < q->depth) {
-		auto x = q->bits[i++][j];
+		int64_t x = q->bits[i++][j];
 		s -= 6;
 		j = k >> s;
 		auto w = bit(j);
@@ -392,11 +394,11 @@ qset_insert(QSet *q, size_t k)
 	int i = 0, s = 6 * q->depth;
 	size_t j = 0;
 	while (i < q->depth) {
-		auto bp = &q->bits[i++][j];
-		auto x = *bp;
+		uint64_t *bp = &q->bits[i++][j];
+		uint64_t x = *bp;
 		s -= 6;
 		j = k >> s;
-		auto w = bit(j);
+		uint64_t w = bit(j);
 		if ((x & w) == 0) {
 			if (i < q->depth)
 				q->bits[i][j] = 0;
@@ -419,7 +421,7 @@ qset_remove(QSet *q) // caller must ensure !empty()
 	size_t r = k;
 	do {
 		--i;
-		auto w = bit(k);
+		uint64_t w = bit(k);
 		k >>= 6;
 		if ((q->bits[i][k] &= ~w) != 0)
 			break;
@@ -508,7 +510,7 @@ static void
 qvec_clear(QVec *q)
 {
 	while (!qset_empty(&q->qset)) {
-		auto i = qset_remove(&q->qset);
+		size_t i = qset_remove(&q->qset);
 		nstate_destruct(&q->storage[i]);
 	}
 }
@@ -545,7 +547,7 @@ qvec_lookup(QVec *q, size_t k)
 static std::pair<size_t, NState>
 qvec_remove(QVec *q)
 {
-	auto k = qset_remove(&q->qset);
+	size_t k = qset_remove(&q->qset);
 	std::pair<size_t, NState> r {k, {}};
 	nstate_construct_move(&r.second, &q->storage[k]);
 	return r;
@@ -576,7 +578,7 @@ wconv_nextmbtowc(WConv *wc)
 {
 	wchar_t wct = L'\0';
 	if (wc->cp != wc->ep) {
-		auto n = mbrtowc(&wct, wc->cp, wc->ep - wc->cp, &wc->mbs);
+		size_t n = mbrtowc(&wct, wc->cp, wc->ep - wc->cp, &wc->mbs);
 		if (n == 0 || n == (size_t) -1 || n == (size_t) -2) {
 			if (wct == L'\0')
 				wct = std::numeric_limits<WChar>::min() + (unsigned char) *wc->cp++;
@@ -662,7 +664,7 @@ wconv_nextchr(WConv *wc)
 static WChar
 wconv_lookahead(WConv *wc)
 {
-	auto wconv(*wc);
+	WConv wconv = *wc;
 	return wconv_nextchr(&wconv);
 }
 
