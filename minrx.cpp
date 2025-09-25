@@ -70,14 +70,6 @@
 #include "charset.h"
 #endif
 
-#ifdef GAWK
-// Work around Gawk's use of a nonstandard allocator that probably lacks
-// extern "C" declarations for its functions.
-#undef free
-#undef malloc
-#undef realloc
-#endif
-
 #include "minrx.h"
 
 #ifdef __GNUC__
