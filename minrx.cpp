@@ -221,7 +221,7 @@ cowvec_storage_alloc(COWVec_Allocator *a)
 static COWVec_Storage *
 cowvec_storage_clone(COWVec_Storage *cvs)
 {
-	auto newcvs = cowvec_storage_alloc(cvs->u.allocator);
+	COWVec_Storage *newcvs = cowvec_storage_alloc(cvs->u.allocator);
 	for (size_t i = 0, n = cvs->u.allocator->length; i != n; ++i)
 		cowvec_storage_put(newcvs, i, cowvec_storage_get(cvs, i));
 	return newcvs;
@@ -372,7 +372,7 @@ qset_contains(const QSet *q, size_t k)
 		int64_t x = q->bits[i++][j];
 		s -= 6;
 		j = k >> s;
-		auto w = bit(j);
+		int64_t w = bit(j);
 		if (!(x & w))
 			return false;
 	}
@@ -843,14 +843,14 @@ struct CSet {
 	}
 #endif
 	minrx_result_t parse(minrx_regcomp_flags_t flags, WConv_Encoding enc, WConv &wconv) {
-		auto wc = wconv_nextchr(&wconv);
+		WChar wc = wconv_nextchr(&wconv);
 		bool inv = wc == L'^';
 		if (inv)
 			wc = wconv_nextchr(&wconv);
 		for (bool first = true; first || wc != L']'; first = false) {
 			if (wc == End)
 				return MINRX_REG_EBRACK;
-			auto wclo = wc, wchi = wc;
+			WChar wclo = wc, wchi = wc;
 			wc = wconv_nextchr(&wconv);
 			if (wclo == L'\\' && (flags & MINRX_REG_BRACK_ESCAPE) != 0) {
 				if (wc != End) {
@@ -879,7 +879,7 @@ struct CSet {
 						return MINRX_REG_ECOLLATE;
 					wc = wconv_nextchr(&wconv);
 				} else if (wc == L':') {
-					auto bp = wconv_ptr(&wconv), ep = bp;
+					const char *bp = wconv_ptr(&wconv), *ep = bp;
 					do
 						ep = wconv_ptr(&wconv), wc = wconv_nextchr(&wconv);
 					while (wc != End && wc != L':');
@@ -920,7 +920,7 @@ struct CSet {
 			}
 			bool range = false;
 			if (wc == L'-') {
-				auto save = wconv_save(&wconv);
+				const char *save = wconv_save(&wconv);
 				wc = wconv_nextchr(&wconv);
 				if (wc == End)
 					return MINRX_REG_EBRACK;
@@ -956,7 +956,7 @@ struct CSet {
 			if (wclo >= 0) {
 				set(wclo, wchi);
 				if ((flags & MINRX_REG_ICASE) != 0) {
-					for (auto wc = wclo; wc <= wchi; ++wc) {
+					for (WChar wc = wclo; wc <= wchi; ++wc) {
 						set(enc == Byte ? tolower(wc) : towlower(wc));
 						set(enc == Byte ? toupper(wc) : towupper(wc));
 					}
