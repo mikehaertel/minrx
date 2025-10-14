@@ -38,7 +38,6 @@
 
 // ISO C++
 #include <array>
-#include <deque>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -1077,14 +1076,134 @@ struct Regexp {
 	WConv_Encoding enc;
 	minrx_result_t err;
 	const std::vector<CSet> csets;
-	const std::vector<Node> nodes;
+	const Node *nodes;
+	size_t nnode;
 	std::optional<const CSet> firstcset;
 	std::optional<const std::array<bool, 256>> firstbytes;
 	std::optional<char> firstunique;
 	size_t nmin;
 	size_t nstk;
 	size_t nsub;
+	~Regexp() {
+		free((void *) nodes);
+	}
 };
+
+//
+// The output of compiling is a malloced array of nodes, but while compiling
+// we keep the future array elements in a singly-linked list to facilitate
+// concatenation as well as element insertion at both ends.
+//
+typedef struct ListNode ListNode;	// Node wrapped in list element container.
+typedef struct NodeList NodeList;	// List of nodes.
+typedef struct NodePool NodePool;	// Pool of not-yet-allocated ListNodes.
+
+struct ListNode {
+	Node node;
+	ListNode *next;
+};
+
+struct NodeList {
+	ListNode *first;
+	ListNode *final;
+	NInt size;
+};
+
+#define NALLOC 25
+struct NodePool {
+	int nalloc;
+	NodePool *prev;
+	ListNode nodes[NALLOC];
+};
+
+static ListNode *
+alloc(NodePool **npp, NInt type, NInt arg0, NInt arg1, NInt nstk)
+{
+	ListNode *n;
+	if (!*npp || (*npp)->nalloc == NALLOC) {
+		NodePool *np = (NodePool *) malloc(sizeof (NodePool));
+		if (!np)
+			return nullptr;
+		np->nalloc = 0;
+		np->prev = *npp;
+		*npp = np;
+	}
+	n = &(*npp)->nodes[(*npp)->nalloc++];
+	n->node.type = type;
+	n->node.args[0] = arg0;
+	n->node.args[1] = arg1;
+	n->node.nstk = nstk;
+	return n;
+}
+
+static bool
+concatcopy(NodePool **npp, NodeList *x, const NodeList *y)
+{
+	for (auto n = y->first; n; n = n->next) {
+		auto nn = alloc(npp, n->node.type, n->node.args[0], n->node.args[1], n->node.nstk);
+		if (!nn)
+			return false;
+		if (x->size++)
+			x->final->next = nn;
+		else
+			x->first = nn;
+		x->final = nn;
+		nn->next = nullptr;
+	}
+	return true;
+}
+
+static void
+concatmove(NodeList *x, const NodeList *y)
+{
+	if (x->size) {
+		if (y->size)
+			x->final->next = y->first, x->final = y->final, x->size += y->size;
+	} else {
+		*x = *y;
+	}
+}
+
+static bool
+emplace_first(NodePool **npp, NodeList *x, NInt type, NInt arg0, NInt arg1, NInt nstk)
+{
+	ListNode *n = alloc(npp, type, arg0, arg1, nstk);
+	if (!n)
+		return false;
+	if (x->size++) {
+		n->next = x->first;
+		x->first = n;
+	} else {
+		n->next = nullptr;
+		x->first = x->final = n;
+	}
+	return true;
+}
+
+static bool
+emplace_final(NodePool **npp, NodeList *x, NInt type, NInt arg0, NInt arg1, NInt nstk)
+{
+	ListNode *n = alloc(npp, type, arg0, arg1, nstk);
+	if (!n)
+		return false;
+	if (x->size++)
+		x->final->next = n;
+	else
+		x->first = n;
+	x->final = n;
+	n->next = nullptr;
+	return true;
+}
+
+static NodeList
+empty()
+{
+	NodeList r;
+	r.first = nullptr;
+	r.final = nullptr;
+	r.size = 0;
+	return r;
+}
 
 struct Compile {
 	const minrx_regcomp_flags_t flags;
@@ -1100,6 +1219,7 @@ struct Compile {
 	std::map<WChar, unsigned int> icmap;
 	NInt nmin = 0;
 	NInt nsub = 0;
+	NodePool *np = 0;
 	Compile(WConv_Encoding e, const char *bp, const char *ep, minrx_regcomp_flags_t flags): flags(flags), enc(e) {
 		wconv_construct(&wconv, e, bp, ep);
 		wc = wconv_nextchr(&wconv);
@@ -1125,14 +1245,14 @@ struct Compile {
 		n = v;
 		return true;
 	}
-	typedef std::tuple<std::deque<Node>, size_t, bool, minrx_result_t> Subexp;
+	typedef std::tuple<NodeList, size_t, bool, minrx_result_t> Subexp;
 	Subexp alt(bool nested, NInt nstk) {
 		auto [lhs, lhmaxstk, lhasmin, err] = cat(nested, nstk);
 		if (err)
 			return {lhs, lhmaxstk, lhasmin, err};
 		if (wc == L'|') {
-			for (auto &l : lhs)
-				l.nstk += 1;
+			for (auto l = lhs.first; l != nullptr; l = l->next)
+				l->node.nstk += 1;
 			std::vector<Subexp> alts;
 			while (wc == L'|') {
 				wc = wconv_nextchr(&wconv);
@@ -1141,21 +1261,27 @@ struct Compile {
 			auto [rhs, rhmaxstk, rhasmin, err] = alts.back();
 			if (err)
 				return {rhs, rhmaxstk, rhasmin, err};
-			rhs.push_front({Node::Goto, {rhs.size(), rhs.size() + 1}, nstk + 1});
+			if (!emplace_first(&np, &rhs, Node::Goto, rhs.size, rhs.size + 1, nstk + 1))
+				return {empty(), 0, false, MINRX_REG_ESPACE};
 			alts.pop_back();
 			while (!alts.empty()) {
 				auto [mhs, mhmaxstk, mhasmin, _] = alts.back();
 				alts.pop_back();
-				rhs.insert(rhs.begin(), mhs.begin(), mhs.end());
+				auto mhsize = mhs.size;
+				concatmove(&mhs, &rhs);
 				rhmaxstk = MAX(mhmaxstk, rhmaxstk);
 				rhasmin |= mhasmin;
-				rhs.push_front({Node::Goto, {mhs.size(), rhs.size() + 1}, nstk + 1});
+				rhs = mhs;
+				if (!emplace_first(&np, &rhs, Node::Goto, mhsize, rhs.size + 1, nstk + 1))
+					return {empty(), 0, false, MINRX_REG_ESPACE};
 			}
-			lhs.push_front({Node::Fork, { lhs.size(), 0 }, nstk + 1});
-			lhs.insert(lhs.end(), rhs.begin(), rhs.end());
+			if (!emplace_first(&np, &lhs, Node::Fork, lhs.size, 0, nstk + 1))
+				return {empty(), 0, false, MINRX_REG_ESPACE};
+			concatmove(&lhs, &rhs);
 			lhmaxstk = MAX(lhmaxstk, rhmaxstk);
 			lhasmin |= rhasmin;
-			lhs.push_back({Node::Join, {lhs.size() - 1, 0}, nstk + 1});
+			if (!emplace_final(&np, &lhs, Node::Join, lhs.size - 1, 0, nstk + 1))
+				return {empty(), 0, false, MINRX_REG_ESPACE};
 		}
 		return {lhs, lhmaxstk, lhasmin, MINRX_REG_SUCCESS};
 	}
@@ -1167,30 +1293,34 @@ struct Compile {
 			auto [rhs, rhmaxstk, rhasmin, err] = rep(nested, nstk);
 			if (err)
 				return {rhs, rhmaxstk, rhasmin, err};
-			lhs.insert(lhs.end(), rhs.begin(), rhs.end());
+			concatmove(&lhs, &rhs);
 			lhmaxstk = MAX(lhmaxstk, rhmaxstk);
-			lhasmin |= rhasmin; 
+			lhasmin |= rhasmin;
 		}
 		return {lhs, lhmaxstk, lhasmin, MINRX_REG_SUCCESS};
 	}
 	Subexp minimize(const Subexp &lh, NInt nstk) {
+		if (std::get<minrx_result_t>(lh))
+			return lh;
 		auto [nodes, maxstk, hasmin, err] = lh;
-		for (auto &n : nodes)
-			n.nstk += 1;
-		nodes.push_front({Node::MinL, {0, 0}, nstk + 1});
-		nodes.push_back({Node::MinR, {0, 0}, nstk});
+		for (auto n = nodes.first; n != nullptr; n = n->next)
+			n->node.nstk += 1;
+		if (!emplace_first(&np, &nodes, Node::MinL, 0, 0, nstk + 1) || !emplace_final(&np, &nodes, Node::MinR, 0, 0, nstk))
+			return {empty(), 0, false, MINRX_REG_ESPACE};
 		nmin = MAX(nmin, (size_t) 1);
 		return {nodes, maxstk + 1, true, err};
 	}
 	void minraise(Subexp &lh) {
+		if (std::get<minrx_result_t>(lh))
+			return;
 		auto &[nodes, maxstk, hasmin, err] = lh;
 		NInt maxlevel = 0;
-		for (auto &n : nodes)
-			switch (n.type) {
+		for (auto n = nodes.first; n != nullptr; n = n->next)
+			switch (n->node.type) {
 			case Node::MinB:
 			case Node::MinL:
 			case Node::MinR:
-				maxlevel = MAX(maxlevel, ++n.args[0]);
+				maxlevel = MAX(maxlevel, ++n->node.args[0]);
 				break;
 			default:
 				;
@@ -1198,21 +1328,28 @@ struct Compile {
 		nmin = MAX(nmin, maxlevel + 1);
 	}
 	Subexp mkrep(const Subexp &lh, bool optional, bool infinite, NInt nstk) {
-		auto [lhs, lhmaxstk, lhasmin, _] = lh;
+		if (std::get<minrx_result_t>(lh))
+			return lh;
+		auto [lhs, lhmaxstk, lhasmin, err] = lh;
 		if (optional && !infinite) {
-			for (auto &l : lhs) l.nstk += 2;
-			auto lhsize = lhs.size();
-			lhs.push_front({Node::Skip, {lhsize, 0}, nstk + 2});
+			for (auto l = lhs.first; l != nullptr; l = l->next)
+				l->node.nstk += 2;
+			auto lhsize = lhs.size;
+			if (!emplace_first(&np, &lhs, Node::Skip, lhsize, 0, nstk + 2))
+				return {empty(), 0, false, MINRX_REG_ESPACE};
 			return {lhs, lhmaxstk + 2, lhasmin, MINRX_REG_SUCCESS};
 		} else {
-			for (auto &l : lhs) l.nstk += 3;
-			auto lhsize = lhs.size();
-			lhs.push_front({Node::Loop, {lhsize, (NInt) optional}, nstk + 3});
-			lhs.push_back({Node::Next, {lhsize, (NInt) infinite}, nstk});
+			for (auto l = lhs.first; l != nullptr; l = l->next)
+				l->node.nstk += 3;
+			auto lhsize = lhs.size;
+			if (!emplace_first(&np, &lhs, Node::Loop, lhsize, (NInt) optional, nstk + 3) || !emplace_final(&np, &lhs, Node::Next, lhsize, (NInt) infinite, nstk))
+				return {empty(), 0, false, MINRX_REG_ESPACE};
 			return {lhs, lhmaxstk + 3, lhasmin, MINRX_REG_SUCCESS};
 		}
 	}
 	Subexp mkrep(const Subexp &lh, NInt m, NInt n, NInt nstk) {
+		if (std::get<minrx_result_t>(lh))
+			return lh;
 		if ((m != (NInt) -1 && m > RE_DUP_MAX) || (n != (NInt) -1 && n > RE_DUP_MAX) || m > n)
 			return {{}, 0, false, MINRX_REG_BADBR};
 		if (n == 0)
@@ -1228,27 +1365,33 @@ struct Compile {
 		auto [lhs, lhmaxstk, lhasmin, _] = lh;
 		auto [rhs, rhmaxstk, rhasmin,__] = lh;
 		NInt k;
+		lhs = empty();
+		if (!concatcopy(&np, &lhs, &rhs))	// force initial lhs to be a copy
+			return {empty(), 0, false, MINRX_REG_ESPACE};
 		for (k = 1; k < m; ++k)
-			lhs.insert(lhs.end(), rhs.begin(), rhs.end());
+			if (!concatcopy(&np, &lhs, &rhs))
+				return {empty(), 0, false, MINRX_REG_ESPACE};
 		if (n != (NInt) -1 && k < n) {
 			lhmaxstk += 2;
 			rhmaxstk += 2;
-			for (auto &r : rhs)
-				r.nstk += 2;
-			auto rhsize = rhs.size();
-			rhs.push_front({Node::Skip, {rhsize, 1}, nstk + 2});
+			for (auto r = rhs.first; r != nullptr; r = r->next)
+				r->node.nstk += 2;
+			auto rhsize = rhs.size;
+			if (!emplace_first(&np, &rhs, Node::Skip, rhsize, 1, nstk + 2))
+				return {empty(), 0, false, MINRX_REG_ESPACE};
 			for (; k < n; ++k)
-				lhs.insert(lhs.end(), rhs.begin(), rhs.end());
+				if (!concatcopy(&np, &lhs, &rhs))
+					return {empty(), 0, false, MINRX_REG_ESPACE};
 		}
 		if (n == (NInt) -1) {
 			lhmaxstk += 3;
 			rhmaxstk += 3;
-			for (auto &r : rhs)
-				r.nstk += 3;
-			auto rhsize = rhs.size();
-			rhs.push_front({Node::Loop, {rhsize, 1}, nstk + 3});
-			rhs.push_back({Node::Next, {rhsize, 1}, nstk});
-			lhs.insert(lhs.end(), rhs.begin(), rhs.end());
+			for (auto r = rhs.first; r != nullptr; r = r->next)
+				r->node.nstk += 3;
+			auto rhsize = rhs.size;
+			if (!emplace_first(&np, &rhs, Node::Loop, rhsize, 1, nstk + 3) || !emplace_final(&np, &rhs, Node::Next, rhsize, 1, nstk))
+				return {empty(), 0, false, MINRX_REG_ESPACE};
+			concatmove(&lhs, &rhs);
 		}
 		if (m == 0)
 			return mkrep({lhs, rhmaxstk, rhasmin, MINRX_REG_SUCCESS}, true, false, nstk);
@@ -1277,7 +1420,8 @@ struct Compile {
 					minraise(lh);
 				lh = mkrep(minimal ? minimize(lh, nstk) : lh, optional, infinite, nstk);
 			comout:	if (minimal) {
-					std::get<0>(lh).push_front({Node::MinB, {0, 0}, nstk});
+					if (!emplace_first(&np, &std::get<0>(lh), Node::MinB, 0, 0, nstk))
+						return {empty(), 0, false, MINRX_REG_ESPACE};
 					hasmin = true;
 				}
 				std::get<bool>(lh) = hasmin;
@@ -1333,7 +1477,7 @@ struct Compile {
 		}
 	}
 	Subexp chr(bool nested, NInt nstk) {
-		std::deque<Node> lhs;
+		NodeList lhs = empty();
 		size_t lhmaxstk;
 		bool lhasmin = false;
 		switch (wc) {
@@ -1341,7 +1485,8 @@ struct Compile {
 		normal:
 			lhmaxstk = nstk;
 			if ((flags & MINRX_REG_ICASE) == 0) {
-				lhs.push_back({(NInt) wc, {0, 0}, nstk});
+				if (!emplace_first(&np, &lhs, (NInt) wc, 0, 0, nstk))
+					return {empty(), 0, false, MINRX_REG_ESPACE};
 			} else {
 				WChar wcl = enc == Byte ? tolower(wc) : towlower(wc);
 				WChar wcu = enc == Byte ? toupper(wc) : towupper(wc);
@@ -1354,9 +1499,11 @@ struct Compile {
 						csets.back().set(wcl);
 						csets.back().set(wcu);
 					}
-					lhs.push_back({Node::CSet, {icmap[key], 0}, nstk});
+					if (!emplace_final(&np, &lhs, Node::CSet, icmap[key], 0, nstk))
+						return {empty(), 0, false, MINRX_REG_ESPACE};
 				} else {
-					lhs.push_back({(NInt) wc, {0, 0}, nstk});
+					if (!emplace_final(&np, &lhs, (NInt) wc, 0, 0, nstk))
+						return {empty(), 0, false, MINRX_REG_ESPACE};
 				}
 			}
 			wc = wconv_nextchr(&wconv);
@@ -1369,12 +1516,13 @@ struct Compile {
 		case L'*':
 		case L'+':
 		case L'?':
-			return {{}, 0, false, MINRX_REG_BADRPT};
+			return {empty(), 0, false, MINRX_REG_BADRPT};
 		case L'[':
 			lhmaxstk = nstk;
-			lhs.push_back({Node::CSet, {csets.size(), 0}, nstk});
+			if (!emplace_final(&np, &lhs, Node::CSet, csets.size(), 0, nstk))
+				return {empty(), 0, false, MINRX_REG_ESPACE};
 			if (auto err = csets.emplace_back(enc).parse(flags, enc, wconv))
-				return {{}, 0, false, err};
+				return {empty(), 0, false, err};
 			wc = wconv_nextchr(&wconv);
 			break;
 		case L'.':
@@ -1386,17 +1534,20 @@ struct Compile {
 				csets.back().invert();
 			}
 			lhmaxstk = nstk;
-			lhs.push_back({Node::CSet, {*dot, 0}, nstk});
+			if (!emplace_final(&np, &lhs, Node::CSet, *dot, 0, nstk))
+				return {empty(), 0, false, MINRX_REG_ESPACE};
 			wc = wconv_nextchr(&wconv);
 			break;
 		case L'^':
 			lhmaxstk = nstk;
-			lhs.push_back({(flags & MINRX_REG_NEWLINE) == 0 ? Node::ZBOB : Node::ZBOL, {0, 0}, nstk});
+			if (!emplace_final(&np, &lhs, (flags & MINRX_REG_NEWLINE) == 0 ? Node::ZBOB : Node::ZBOL, 0, 0, nstk))
+				return {empty(), 0, false, MINRX_REG_ESPACE};
 			wc = wconv_nextchr(&wconv);
 			break;
 		case L'$':
 			lhmaxstk = nstk;
-			lhs.push_back({(flags & MINRX_REG_NEWLINE) == 0 ? Node::ZEOB : Node::ZEOL, {0, 0}, nstk});
+			if (!emplace_final(&np, &lhs, (flags & MINRX_REG_NEWLINE) == 0 ? Node::ZEOB : Node::ZEOL, 0, 0, nstk))
+				return {empty(), 0, false, MINRX_REG_ESPACE};
 			wc = wconv_nextchr(&wconv);
 			break;
 		case L'\\':
@@ -1406,32 +1557,38 @@ struct Compile {
 			case L'<':
 				if ((flags & MINRX_REG_EXTENSIONS_BSD) == 0)
 					goto normal;
-				lhs.push_back({Node::ZBOW, {0, 0}, nstk});
+				if (!emplace_final(&np, &lhs, Node::ZBOW, 0, 0, nstk))
+					return {empty(), 0, false, MINRX_REG_ESPACE};
 				break;
 			case L'>':
 				if ((flags & MINRX_REG_EXTENSIONS_BSD) == 0)
 					goto normal;
-				lhs.push_back({Node::ZEOW, {0, 0}, nstk});
+				if (!emplace_final(&np, &lhs, Node::ZEOW, 0, 0, nstk))
+					return {empty(), 0, false, MINRX_REG_ESPACE};
 				break;
 			case L'`':
 				if ((flags & MINRX_REG_EXTENSIONS_GNU) == 0)
 					goto normal;
-				lhs.push_back({Node::ZBOB, {0, 0}, nstk});
+				if (!emplace_final(&np, &lhs, Node::ZBOB, 0, 0, nstk))
+					return {empty(), 0, false, MINRX_REG_ESPACE};
 				break;
 			case L'\'':
 				if ((flags & MINRX_REG_EXTENSIONS_GNU) == 0)
 					goto normal;
-				lhs.push_back({Node::ZEOB, {0, 0}, nstk});
+				if (!emplace_final(&np, &lhs, Node::ZEOB, 0, 0, nstk))
+					return {empty(), 0, false, MINRX_REG_ESPACE};
 				break;
 			case L'b':
 				if ((flags & MINRX_REG_EXTENSIONS_GNU) == 0)
 					goto normal;
-				lhs.push_back({Node::ZXOW, {0, 0}, nstk});
+				if (!emplace_final(&np, &lhs, Node::ZXOW, 0, 0, nstk))
+					return {empty(), 0, false, MINRX_REG_ESPACE};
 				break;
 			case L'B':
 				if ((flags & MINRX_REG_EXTENSIONS_GNU) == 0)
 					goto normal;
-				lhs.push_back({Node::ZNWB, {0, 0}, nstk});
+				if (!emplace_final(&np, &lhs, Node::ZNWB, 0, 0, nstk))
+					return {empty(), 0, false, MINRX_REG_ESPACE};
 				break;
 			case L's':
 				if ((flags & MINRX_REG_EXTENSIONS_GNU) == 0)
@@ -1442,7 +1599,8 @@ struct Compile {
 					wconv_constructz(&wc, enc, "[:space:]]");
 					csets.emplace_back(enc).parse(flags, enc, wc);
 				}
-				lhs.push_back({Node::CSet, {*esc_s, 0}, nstk});
+				if (!emplace_final(&np, &lhs, Node::CSet, *esc_s, 0, nstk))
+					return {empty(), 0, false, MINRX_REG_ESPACE};
 				break;
 			case L'S':
 				if ((flags & MINRX_REG_EXTENSIONS_GNU) == 0)
@@ -1453,7 +1611,8 @@ struct Compile {
 					wconv_constructz(&wc, enc, "^[:space:]]");
 					csets.emplace_back(enc).parse(flags, enc, wc);
 				}
-				lhs.push_back({Node::CSet, {*esc_S, 0}, nstk});
+				if (!emplace_final(&np, &lhs, Node::CSet, *esc_S, 0, nstk))
+					return {empty(), 0, false, MINRX_REG_ESPACE};
 				break;
 			case L'w':
 				if ((flags & MINRX_REG_EXTENSIONS_GNU) == 0)
@@ -1464,7 +1623,8 @@ struct Compile {
 					wconv_constructz(&wc, enc, "[:alnum:]_]");
 					csets.emplace_back(enc).parse(flags, enc, wc);
 				}
-				lhs.push_back({Node::CSet, {*esc_w, 0}, nstk});
+				if (!emplace_final(&np, &lhs, Node::CSet, *esc_w, 0, nstk))
+					return {empty(), 0, false, MINRX_REG_ESPACE};
 				break;
 			case L'W':
 				if ((flags & MINRX_REG_EXTENSIONS_GNU) == 0)
@@ -1475,7 +1635,8 @@ struct Compile {
 					wconv_constructz(&wc, enc, "^[:alnum:]_]");
 					csets.emplace_back(enc).parse(flags, enc, wc);
 				}
-				lhs.push_back({Node::CSet, {*esc_W, 0}, nstk});
+				if (!emplace_final(&np, &lhs, Node::CSet, *esc_W, 0, nstk))
+					return {empty(), 0, false, MINRX_REG_ESPACE};
 				break;
 			case End:
 				return {{}, 0, false, MINRX_REG_EESCAPE};
@@ -1494,8 +1655,8 @@ struct Compile {
 					return {lhs, lhmaxstk, lhasmin, err};
 				if (wc != L')')
 					return {{}, 0, false, MINRX_REG_EPAREN};
-				lhs.push_front({Node::SubL, {n, nsub}, nstk + 1});
-				lhs.push_back({Node::SubR, {n, nsub}, nstk});
+				if (!emplace_first(&np, &lhs, Node::SubL, n, nsub, nstk + 1) || !emplace_final(&np, &lhs, Node::SubR, n, nsub, nstk))
+					return {empty(), 0, false, MINRX_REG_ESPACE};
 				wc = wconv_nextchr(&wconv);
 			}
 			break;
@@ -1510,17 +1671,17 @@ struct Compile {
 		}
 		return {lhs, lhmaxstk, lhasmin, MINRX_REG_SUCCESS};
 	}
-	std::optional<CSet> firstclosure(const std::vector<Node> &nodes) {
-		if (nodes.size() == 0)
+	std::optional<CSet> firstclosure(const Node *nodes, NInt nnode) {
+		if (nnode == 0)
 			return {};
 		QSet epsq, epsv, firsts;
-		if (!qset_construct(&epsq, nodes.size()))
+		if (!qset_construct(&epsq, nnode))
 			return {};
-		if (!qset_construct(&epsv, nodes.size())) {
+		if (!qset_construct(&epsv, nnode)) {
 			qset_destruct(&epsq);
 			return {};
 		}
-		if (!qset_construct(&firsts, nodes.size())) {
+		if (!qset_construct(&firsts, nnode)) {
 			qset_destruct(&epsq);
 			qset_destruct(&epsv);
 			return {};
@@ -1583,24 +1744,33 @@ struct Compile {
 		return firstcset->firstbytes(e);
 	}
 	Regexp *compile() {
+		Node *nodes = nullptr;
+		NInt nnode = 0;
 		if ((flags & MINRX_REG_MINDISABLE) != 0 && (flags & MINRX_REG_MINIMAL) != 0)
-			return new Regexp { enc, MINRX_REG_BADPAT, {}, {}, {}, {}, {}, 0, 0, 1 };
+			return new Regexp { enc, MINRX_REG_BADPAT, {}, nullptr, 0, {}, {}, {}, 0, 0, 1 };
 		auto [lhs, nstk, hasmin, err] = alt(false, 0);
+		if (!err && (!emplace_final(&np, &lhs, Node::Exit, 0, 0, 0) || !(nodes = (Node *) malloc(lhs.size * sizeof (Node)))))
+			err = MINRX_REG_ESPACE;
 		if (err) {
 			csets.clear();
-			lhs.clear();
+			lhs = empty();
 			nmin = 0;
 			nstk = 0;
 			nsub = 0;
-		} else {
-			lhs.push_back({Node::Exit, {0, 0}, 0});
 		}
 		if (nmin > 0)
-			for (auto &l : lhs) l.nstk += nmin;
-		std::vector<Node> nodes{lhs.begin(), lhs.end()};
-		auto fc = firstclosure(nodes);
-		auto [fb, fu] = firstbytes(enc, fc);
-		return new Regexp{ enc, err, std::move(csets), std::move(nodes), std::move(fc), std::move(fb), std::move(fu), nmin, nstk, nsub + 1 };
+			for (auto l = lhs.first; l; l = l->next)
+				l->node.nstk += nmin;
+		for (auto l = lhs.first; l; l = l->next)
+			nodes[nnode++] = l->node;
+		for (auto p = np, q = p; p; p = q) {
+			q = p->prev;
+			free((void *) p);
+		}
+		np = nullptr;
+		auto fc = firstclosure(nodes, nnode);	// FIXME: check for allocation errors
+		auto [fb, fu] = firstbytes(enc, fc);	// FIXME: check for allocation errors
+		return new Regexp{ enc, err, std::move(csets), nodes, nnode, std::move(fc), std::move(fb), std::move(fu), nmin, nstk, nsub + 1 };
 	}
 };
 
@@ -1630,7 +1800,7 @@ execute_construct(Execute *e, const Regexp *r, minrx_regexec_flags_t flags, cons
 {
 	e->r = r;
 	e->flags = flags;
-	e->nodes = r->nodes.data();
+	e->nodes = r->nodes;
 	e->suboff = r->nmin + r->nstk;
 	e->minvcnt = (r->nmin + SizeBits - 1) / SizeBits;
 	e->minvoff = e->suboff + 2 * r->nsub;
@@ -1642,9 +1812,9 @@ execute_construct(Execute *e, const Regexp *r, minrx_regexec_flags_t flags, cons
 	cowvec_allocator_construct(&e->allocator, e->nestoff + r->nmin);
 	cowvec_construct(&e->best, nullptr);
 	e->bestmincount = 0;
-	if (!qset_construct(&e->epsq, r->nodes.size()))
+	if (!qset_construct(&e->epsq, r->nnode))
 		throw std::bad_alloc();
-	qvec_construct(&e->epsv, r->nodes.size());
+	qvec_construct(&e->epsv, r->nnode);
 }
 
 static void
@@ -1863,8 +2033,8 @@ static int
 execute(Execute *e, size_t nm, minrx_regmatch_t *rm)
 {
 	QVec mcsvs[2];
-	qvec_construct(&mcsvs[0], e->r->nodes.size());
-	qvec_construct(&mcsvs[1], e->r->nodes.size());
+	qvec_construct(&mcsvs[0], e->r->nnode);
+	qvec_construct(&mcsvs[1], e->r->nnode);
 	e->off = wconv_off(&e->wconv);
 	auto wcnext = wconv_nextchr(&e->wconv);
 	if ((e->flags & MINRX_REG_RESUME) != 0 && rm && rm[0].rm_eo > 0)
