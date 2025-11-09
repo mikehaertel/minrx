@@ -40,9 +40,7 @@
 #include <array>
 #include <limits>
 #include <map>
-#include <mutex>
 #include <optional>
-#include <set>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -64,10 +62,8 @@
 #define N_(msgid) msgid
 
 // Arnold Robbins' charset library
-#ifdef CHARSET
 #include <memory>
 #include "charset.h"
-#endif
 
 #include "minrx.h"
 
@@ -684,7 +680,6 @@ wconv_restore(WConv *wc, const char *p)
 }
 
 struct CSet {
-#ifdef CHARSET
 	charset_t *charset = nullptr;
 	CSet(WConv_Encoding enc) {
 		int errcode = 0;
@@ -700,85 +695,25 @@ struct CSet {
 		return *this;
 	}
 	~CSet() { if (charset) { charset_free(charset); charset = nullptr; } }
-#else
-	static std::map<std::string, CSet> cclmemo;
-	static std::mutex cclmutex;
-	struct Range {
-		Range(WChar x, WChar y): min(MIN(x, y)), max(MAX(x, y)) {}
-		WChar min, max;
-		int operator<=>(const Range &r) const {
-			return (min > r.max) - (max < r.min);
-		}
-	};
-	std::set<Range> ranges;
-	CSet(WConv_Encoding) { }
-	CSet &operator|=(const CSet &cs) {
-		for (const auto &e : cs.ranges)
-			set(e.min, e.max);
-		return *this;
-	}
-#endif
 	CSet &invert() {
-#ifdef CHARSET
 		int errcode = 0;
 		charset_t *newset = charset_invert(charset, &errcode); // FIXME: no error checking
 		charset_free(charset);
 		charset = newset;
-#else
-		std::set<Range> nranges;
-		WChar lo = 0;
-		for (const auto &e : ranges) {
-			if (lo < e.min)
-				nranges.emplace(lo, e.min - 1);
-			lo = e.max + 1;
-		}
-		if (lo <= WCharMax)
-			nranges.emplace(lo, WCharMax);
-		ranges = std::move(nranges);
-#endif
 		return *this;
 	}
 	CSet &set(WChar wclo, WChar wchi) {
-#ifdef CHARSET
 		charset_add_range(charset, wclo, wchi);	// FIXME: no error checking
-#else
-		auto e = Range(wclo - (wclo != std::numeric_limits<WChar>::min()), wchi + (wchi != std::numeric_limits<WChar>::max()));
-		auto [x, y] = ranges.equal_range(e);
-		if (x == y) {
-			ranges.insert(Range(wclo, wchi));
-		} else {
-			if (x->max >= e.min)
-				wclo = MIN(wclo, x->min);
-			auto z = y;
-			--z;
-			if (z->min <= e.max)
-				wchi = MAX(wchi, z->max);
-			auto i = ranges.erase(x, y);
-			ranges.insert(i, Range(wclo, wchi));
-		}
-#endif
 		return *this;
 	}
 	CSet &set(WChar wc) {
-#ifdef CHARSET
 		charset_add_char(charset, wc);	// FIXME: no error checking
 		return *this;
-#else
-		return set(wc, wc);
-#endif
 	}
 	bool test(WChar wc) const {
-#ifdef CHARSET
 		return charset_in_set(charset, wc);
-#else
-		if (wc < 0)
-			return false;
-		auto i = ranges.lower_bound(Range(wc, wc));
-		return i != ranges.end() && wc >= i->min && wc <= i->max;
-#endif
 	}
-	bool cclass(minrx_regcomp_flags_t flags, WConv_Encoding enc, const std::string &name) {
-#ifdef CHARSET
+	bool cclass(minrx_regcomp_flags_t flags, WConv_Encoding, const std::string &name) {
 		int result = charset_add_cclass(charset, name.c_str());
 		if ((flags & MINRX_REG_ICASE) != 0) {
 			if (name == "lower")
@@ -787,48 +722,11 @@ struct CSet {
 				charset_add_cclass(charset, "lower");	// FIXME: Add error checking
 		}
 		return result == CSET_SUCCESS;
-#else
-		auto wct = wctype(name.c_str());
-		if (wct) {
-			std::string key = name + ":" + setlocale(LC_CTYPE, NULL) + ":" + ((flags & MINRX_REG_ICASE) != 0 ? "1" : "0");
-			std::lock_guard<std::mutex> lock(cclmutex);
-			auto i = cclmemo.find(key);
-			if (i == cclmemo.end()) {
-				if (enc == Byte)
-					for (WChar b = 0; b <= 0xFF; ++b) {
-						if (iswctype(btowc(b), wct)) {
-							set(b);
-							if ((flags & MINRX_REG_ICASE) != 0) {
-								set(tolower(b));
-								set(toupper(b));
-							}
-						}
-					}
-				else
-					for (WChar wc = 0; wc <= WCharMax; ++wc) {
-						if (iswctype(wc, wct)) {
-							set(wc);
-							if ((flags & MINRX_REG_ICASE) != 0) {
-								set(towlower(wc));
-								set(towupper(wc));
-							}
-						}
-					}
-				cclmemo.emplace(key, *this);
-				i = cclmemo.find(key);
-			}
-			*this |= i->second; // N.B. could probably be safely outside the critical section, since cclmemo entries are never deleted
-			return true;
-		}
-		return false;
-#endif
 	}
-#ifndef CHARSET
 	void add_equiv(int32_t equiv) {
 		wchar_t wcs_in[2];
 		wchar_t wcs[2];
 		wchar_t abuf[100], wbuf[100];
-
 		wcs_in[0] = equiv;
 		wcs_in[1] = 0;
 		wcsxfrm(abuf, wcs_in, 99);
@@ -840,7 +738,6 @@ struct CSet {
 				set(u);
 		}
 	}
-#endif
 	minrx_result_t parse(minrx_regcomp_flags_t flags, WConv_Encoding enc, WConv &wconv) {
 		WChar wc = wconv_nextchr(&wconv);
 		bool inv = wc == L'^';
@@ -895,7 +792,6 @@ struct CSet {
 				} else if (wc == L'=') {
 					wc = wconv_nextchr(&wconv);
 					wclo = wchi = wc;
-#ifdef CHARSET
 					charset_add_equiv(charset, wc);	// FIXME: No error checking
 					if ((flags & MINRX_REG_ICASE) != 0) {
 						if (iswlower(wc))
@@ -903,15 +799,6 @@ struct CSet {
 						else if (iswupper(wc))
 							charset_add_equiv(charset, towlower(wc));	// FIXME: no error checking
 					}
-#else
-					add_equiv(wc);
-					if ((flags & MINRX_REG_ICASE) != 0) {
-						if (iswlower(wc))
-							add_equiv(towupper(wc));
-						else if (iswupper(wc))
-							add_equiv(towlower(wc));
-					}
-#endif
 					wc = wconv_nextchr(&wconv);
 					if (wc != L'=' || (wc = wconv_nextchr(&wconv)) != L']')
 						return MINRX_REG_ECOLLATE;
@@ -994,49 +881,26 @@ struct CSet {
 		};
 		switch (e) {
 		case Byte:
-#ifdef CHARSET
-		{
-			int errcode = 0;
-			charset_firstbytes_t bytes = charset_firstbytes(charset, &errcode);
-			for (int i = 0; i < MAX_FIRSTBYTES; i++)
-				fb[i] = bytes.bytes[i];
-		}
-#else
-			for (const auto &r : ranges) {
-				if (r.min > 255)
-					break;
-				auto lo = r.min, hi = MIN(255, r.max);
-				for (auto b = lo; b <= hi; b++)
-					fb[b] = true;
+			{
+				int errcode = 0;
+				charset_firstbytes_t bytes = charset_firstbytes(charset, &errcode);
+				for (int i = 0; i < MAX_FIRSTBYTES; i++)
+					fb[i] = bytes.bytes[i];
 			}
-#endif
 			return {fb, firstunique(fb)};
 		case UTF8:
-#ifdef CHARSET
-		{
-			int errcode = 0;
-			charset_firstbytes_t bytes = charset_firstbytes(charset, &errcode);
-			for (int i = 0; i < MAX_FIRSTBYTES; i++)
-				fb[i] = bytes.bytes[i];
-		}
-#else
-			for (const auto &r : ranges) {
-				auto lo = utfprefix(r.min), hi = utfprefix(r.max);
-				for (auto b = lo; b <= hi; b++)
-					fb[b] = true;
+			{
+				int errcode = 0;
+				charset_firstbytes_t bytes = charset_firstbytes(charset, &errcode);
+				for (int i = 0; i < MAX_FIRSTBYTES; i++)
+					fb[i] = bytes.bytes[i];
 			}
-#endif
 			return {fb, firstunique(fb)};
 		default:
 			return {{}, {}};
 		}
 	}
 };
-
-#ifndef CHARSET
-std::map<std::string, CSet> CSet::cclmemo;
-std::mutex CSet::cclmutex;
-#endif
 
 typedef size_t NInt;
 
