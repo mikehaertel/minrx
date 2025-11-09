@@ -37,7 +37,6 @@
 #include <wctype.h>
 
 // ISO C++
-#include <array>
 #include <limits>
 #include <map>
 #include <optional>
@@ -679,6 +678,10 @@ wconv_restore(WConv *wc, const char *p)
 	wc->cp = p;
 }
 
+struct FirstBytes {
+	bool vec[256];
+};
+
 struct CSet {
 	charset_t *charset = nullptr;
 	CSet(WConv_Encoding enc) {
@@ -869,36 +872,24 @@ struct CSet {
 			return 0xF0 + (wc >> 18);
 		return 0xF4;
 	}
-	std::pair<std::optional<const std::array<bool, 256>>, std::optional<char>>
-	firstbytes(WConv_Encoding e) const {
-		std::array<bool, 256> fb = {};
-		auto firstunique = [](const std::array<bool, 256> &fb) -> std::optional<char> {
-			int n = 0, u = -1;
-			for (int i = 0; i < 256; ++i)
-				if (fb[i])
-					++n, u = i;
-			return n == 1 ? std::optional<char>(u) : std::optional<char>();
-		};
-		switch (e) {
-		case Byte:
-			{
-				int errcode = 0;
-				charset_firstbytes_t bytes = charset_firstbytes(charset, &errcode);
-				for (int i = 0; i < MAX_FIRSTBYTES; i++)
-					fb[i] = bytes.bytes[i];
-			}
-			return {fb, firstunique(fb)};
-		case UTF8:
-			{
-				int errcode = 0;
-				charset_firstbytes_t bytes = charset_firstbytes(charset, &errcode);
-				for (int i = 0; i < MAX_FIRSTBYTES; i++)
-					fb[i] = bytes.bytes[i];
-			}
-			return {fb, firstunique(fb)};
-		default:
-			return {{}, {}};
+	bool
+	firstbytes(FirstBytes *fb, int32_t *fu, WConv_Encoding e) const {
+		for (int i = 0; i < 256; i++)
+			fb->vec[i] = false;
+		if (e == Byte || e == UTF8) {
+			int errcode = 0;
+			charset_firstbytes_t bytes = charset_firstbytes(charset, &errcode);
+			for (int i = 0; i < MAX_FIRSTBYTES; i++)
+				fb->vec[i] = bytes.bytes[i];
+		} else {
+			return false;
 		}
+		int n = 0, u = -1;
+		for (int i = 0; i < 256; ++i)
+			if (fb->vec[i])
+				++n, u = i;
+		*fu = (n == 1) ? u : -1;
+		return true;
 	}
 };
 
@@ -943,8 +934,9 @@ struct Regexp {
 	const Node *nodes;
 	size_t nnode;
 	std::optional<const CSet> firstcset;
-	std::optional<const std::array<bool, 256>> firstbytes;
-	std::optional<char> firstunique;
+	bool firstvalid;
+	FirstBytes firstbytes;
+	int32_t firstunique;
 	size_t nmin;
 	size_t nstk;
 	size_t nsub;
@@ -1601,17 +1593,17 @@ struct Compile {
 		qset_destruct(&epsq);
 		return cs;
 	}
-	std::pair<std::optional<const std::array<bool, 256>>, std::optional<char>>
-	firstbytes(WConv_Encoding e, const std::optional<CSet>& firstcset) {
+	bool
+	firstbytes(FirstBytes *fb, int32_t *fu, WConv_Encoding e, const std::optional<CSet>& firstcset) {
 		if (!firstcset.has_value())
-			return {};
-		return firstcset->firstbytes(e);
+			return false;
+		return firstcset->firstbytes(fb, fu, e);
 	}
 	Regexp *compile() {
 		Node *nodes = nullptr;
 		NInt nnode = 0;
 		if ((flags & MINRX_REG_MINDISABLE) != 0 && (flags & MINRX_REG_MINIMAL) != 0)
-			return new Regexp { enc, MINRX_REG_BADPAT, {}, nullptr, 0, {}, {}, {}, 0, 0, 1 };
+			return new Regexp { enc, MINRX_REG_BADPAT, {}, nullptr, 0, {}, false, {}, -1, 0, 0, 1 };
 		auto [lhs, nstk, hasmin, err] = alt(false, 0);
 		if (!err && (!emplace_final(&np, &lhs, Node::Exit, 0, 0, 0) || !(nodes = (Node *) malloc(lhs.size * sizeof (Node)))))
 			err = MINRX_REG_ESPACE;
@@ -1633,8 +1625,10 @@ struct Compile {
 		}
 		np = nullptr;
 		auto fc = firstclosure(nodes, nnode);	// FIXME: check for allocation errors
-		auto [fb, fu] = firstbytes(enc, fc);	// FIXME: check for allocation errors
-		return new Regexp{ enc, err, std::move(csets), nodes, nnode, std::move(fc), std::move(fb), std::move(fu), nmin, nstk, nsub + 1 };
+		FirstBytes fb;
+		int32_t fu = -1;
+		bool fv = firstbytes(&fb, &fu, enc, fc);
+		return new Regexp{ enc, err, std::move(csets), nodes, nnode, std::move(fc), fv, fb, fu, nmin, nstk, nsub + 1 };
 	}
 };
 
@@ -1906,16 +1900,16 @@ execute(Execute *e, size_t nm, minrx_regmatch_t *rm)
 			e->wcprev = wcnext, e->off = wconv_off(&e->wconv), wcnext = wconv_nextchr(&e->wconv);
 	NState nsinit;
 	nstate_construct(&nsinit, &e->allocator);
-	if ((e->flags & MINRX_REG_NOFIRSTBYTES) == 0 && e->r->firstbytes.has_value() && !e->r->firstcset->test(wcnext)) {
+	if ((e->flags & MINRX_REG_NOFIRSTBYTES) == 0 && e->r->firstvalid && !e->r->firstcset->test(wcnext)) {
 	zoom:
 		auto cp = e->wconv.cp, ep = e->wconv.ep;
-		if (e->r->firstunique.has_value()) {
-			cp = (const char *) memchr(cp, *e->r->firstunique, ep - cp);
+		if (e->r->firstunique != -1) {
+			cp = (const char *) memchr(cp, e->r->firstunique, ep - cp);
 			if (cp == nullptr)
 				goto exit;
 		} else {
-			auto firstbytes = *e->r->firstbytes;
-			while (cp != ep && !firstbytes[(unsigned char) *cp])
+			const bool *fbvec = e->r->firstbytes.vec;
+			while (cp != ep && !fbvec[(unsigned char) *cp])
 				++cp;
 			if (cp == ep)
 				goto exit;
@@ -1958,7 +1952,7 @@ execute(Execute *e, size_t nm, minrx_regmatch_t *rm)
 		if (qvec_empty(&mcsvs[1])) {
 			if (cowvec_valid(&e->best))
 				break;
-			if ((e->flags & MINRX_REG_NOFIRSTBYTES) == 0 && e->r->firstbytes.has_value())
+			if ((e->flags & MINRX_REG_NOFIRSTBYTES) == 0 && e->r->firstvalid)
 				goto zoom;
 		}
 		if (wcnext == End)
@@ -1979,7 +1973,7 @@ execute(Execute *e, size_t nm, minrx_regmatch_t *rm)
 		if (qvec_empty(&mcsvs[0])) {
 			if (cowvec_valid(&e->best))
 				break;
-			if ((e->flags & MINRX_REG_NOFIRSTBYTES) == 0 && e->r->firstbytes.has_value())
+			if ((e->flags & MINRX_REG_NOFIRSTBYTES) == 0 && e->r->firstvalid)
 				goto zoom;
 		}
 	}
