@@ -3969,6 +3969,30 @@ charset_add_cclass(charset_t *set, const char *cclass)
 
 	return CSET_SUCCESS;
 }
+/* charset_add_cclass2 --- get class name from unterminated string */
+
+Static int
+charset_add_cclass2(charset_t *set, const char *bp, const char *ep)
+{
+	if (bp == NULL || ep == NULL || bp >= ep)
+		return CSET_EBADPTR;
+
+#define ARBITRARY_LIMIT	101		// 100 + '\0'
+	char cclass[ARBITRARY_LIMIT];
+
+	if (ep - bp >= ARBITRARY_LIMIT)
+		return CSET_ECTYPE;
+
+	int i;
+	for (i = 0; bp < ep; i++, bp++)
+		cclass[i] = *bp;
+	
+	cclass[i] = '\0';
+
+	return charset_add_cclass(set, cclass);
+
+#undef ARBITRARY_LIMIT
+}
 /* charset_copy --- create a new charset that is copy of the original */
 
 Static charset_t *
