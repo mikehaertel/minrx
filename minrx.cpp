@@ -38,7 +38,6 @@
 
 // ISO C++
 #include <limits>
-#include <map>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -709,8 +708,11 @@ struct CSet {
 		charset_add_range(charset, wclo, wchi);	// FIXME: no error checking
 		return *this;
 	}
-	CSet &set(WChar wc) {
-		charset_add_char(charset, wc);	// FIXME: no error checking
+	CSet &set(WChar wc, bool ignore_case = false) {
+		if (ignore_case)
+			charset_add_char_ic(charset, wc);	// FIXME: no error checking
+		else
+			charset_add_char(charset, wc);	// FIXME: no error checking
 		return *this;
 	}
 	bool test(WChar wc) const {
@@ -1072,7 +1074,6 @@ struct Compile {
 	std::optional<size_t> esc_S;
 	std::optional<size_t> esc_w;
 	std::optional<size_t> esc_W;
-	std::map<WChar, unsigned int> icmap;
 	NInt nmin = 0;
 	NInt nsub = 0;
 	NodePool *np = 0;
@@ -1344,23 +1345,10 @@ struct Compile {
 				if (!emplace_first(&np, &lhs, (NInt) wc, 0, 0, nstk))
 					return {empty(), 0, false, MINRX_REG_ESPACE};
 			} else {
-				WChar wcl = enc == Byte ? tolower(wc) : towlower(wc);
-				WChar wcu = enc == Byte ? toupper(wc) : towupper(wc);
-				if (wc != wcl || wc != wcu) {
-					auto key = MIN(wc, MIN(wcl, wcu));
-					if (icmap.find(key) == icmap.end()) {
-						icmap.emplace(key, csets.size());
-						csets.emplace_back(enc);
-						csets.back().set(wc);
-						csets.back().set(wcl);
-						csets.back().set(wcu);
-					}
-					if (!emplace_final(&np, &lhs, Node::CSet, icmap[key], 0, nstk))
-						return {empty(), 0, false, MINRX_REG_ESPACE};
-				} else {
-					if (!emplace_final(&np, &lhs, (NInt) wc, 0, 0, nstk))
-						return {empty(), 0, false, MINRX_REG_ESPACE};
-				}
+				csets.emplace_back(enc);
+				csets.back().set(wc, true);
+				if (!emplace_final(&np, &lhs, Node::CSet, csets.size() - 1, 0, nstk))
+					return {empty(), 0, false, MINRX_REG_ESPACE};
 			}
 			wc = wconv_nextchr(&wconv);
 			break;
