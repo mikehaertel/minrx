@@ -805,6 +805,7 @@ struct CSet {
 					wc = wconv_nextchr(&wconv);
 					if (wc != L'=' || (wc = wconv_nextchr(&wconv)) != L']')
 						return MINRX_REG_ECOLLATE;
+					wc = wconv_nextchr(&wconv);
 				}
 			}
 			bool range = false;
