@@ -40,7 +40,6 @@
 #include <limits>
 #include <map>
 #include <optional>
-#include <string>
 #include <tuple>
 #include <vector>
 
@@ -716,12 +715,12 @@ struct CSet {
 	bool test(WChar wc) const {
 		return charset_in_set(charset, wc);
 	}
-	bool cclass(minrx_regcomp_flags_t flags, WConv_Encoding, const std::string &name) {
-		int result = charset_add_cclass(charset, name.c_str());
+	bool cclass(minrx_regcomp_flags_t flags, WConv_Encoding, const char *bp, const char *ep) {
+		int result = charset_add_cclass2(charset, bp, ep);
 		if ((flags & MINRX_REG_ICASE) != 0) {
-			if (name == "lower")
+			if (strncmp(bp, "lower", 5) == 0)
 				charset_add_cclass(charset, "upper");	// FIXME: Add error checking
-			else if (name == "upper")
+			else if (strncmp(bp, "upper", 5) == 0)
 				charset_add_cclass(charset, "lower");	// FIXME: Add error checking
 		}
 		return result == CSET_SUCCESS;
@@ -788,8 +787,7 @@ struct CSet {
 					if (wc != L']')
 						return MINRX_REG_ECTYPE;
 					wc = wconv_nextchr(&wconv);
-					auto cclname = std::string(bp, ep);
-					if (cclass(flags, enc, cclname))
+					if (cclass(flags, enc, bp, ep))
 						continue;
 					return MINRX_REG_ECTYPE;
 				} else if (wc == L'=') {
