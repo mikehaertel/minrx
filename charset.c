@@ -3739,6 +3739,40 @@ charset_add_char(charset_t *set, int32_t wc)
 
 	return CSET_SUCCESS;
 }
+/* charset_add_char_ic --- add a single wide character to the set, and its case alternatives */
+
+Static int
+charset_add_char_ic(charset_t *set, int32_t wc)
+{
+	if (set == NULL)
+		return CSET_EBADPTR;
+	if (set->finalized)
+		return CSET_EFROZEN;
+
+	if (wc < 0)
+		return CSET_ERANGE;
+
+	int result1 = charset_add_char(set, wc);
+
+	if (result1 == CSET_SUCCESS) {
+		int result2, result3;
+		result2 = result3 = CSET_SUCCESS;
+
+		int32_t wcl = set->mb_cur_max == 1 ? tolower(wc) : (int32_t) towlower(wc);
+		int32_t wcu = set->mb_cur_max == 1 ? toupper(wc) : (int32_t) towupper(wc);
+
+		if (wc != wcl || wc != wcu) {
+			result2 = charset_add_char(set, wcl);
+			result3 = charset_add_char(set, wcu);
+		}
+		if (result3 != CSET_SUCCESS)
+			return result3;
+		if (result2 != CSET_SUCCESS)
+			return result2;
+	}
+
+	return result1;
+}
 /* charset_add_range --- add a range item */
 
 Static int

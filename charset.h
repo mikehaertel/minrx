@@ -56,6 +56,7 @@ enum {
 };
 Static charset_t *charset_create(int *errcode, int mb_cur_max, bool is_utf8);
 Static int charset_add_char(charset_t *set, int32_t wc);
+Static int charset_add_char_ic(charset_t *set, int32_t wc);
 Static int charset_add_range(charset_t *set, int32_t first, int32_t last);
 Static charset_t *charset_invert(charset_t *set, int *errcode);
 Static int charset_set_no_newlines(charset_t *set, bool no_newlines);
