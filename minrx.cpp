@@ -36,12 +36,6 @@
 #include <wchar.h>
 #include <wctype.h>
 
-// ISO C++
-#include <limits>
-#include <optional>
-#include <tuple>
-#include <vector>
-
 // POSIX
 #include <langinfo.h>
 
@@ -121,7 +115,7 @@ ctz(uint64_t val)
 			count += 8;
 			continue;
 		}
-		
+
 		count += table[x];
 		break;
 	}
@@ -565,7 +559,7 @@ wconv_nextmbtowc(WConv *wc)
 		size_t n = mbrtowc(&wct, wc->cp, wc->ep - wc->cp, &wc->mbs);
 		if (n == 0 || n == (size_t) -1 || n == (size_t) -2) {
 			if (wct == L'\0')
-				wct = std::numeric_limits<WChar>::min() + (unsigned char) *wc->cp++;
+				wct = INT32_MIN + (unsigned char) *wc->cp++;
 		} else {
 			wc->cp += n;
 		}
@@ -584,7 +578,7 @@ wconv_nextutf8(WConv *wc)
 			return wc->cp += 1, u;
 		if ((u & 0x40) == 0 || wc->cp + 1 == wc->ep)
 		error:
-			return wc->cp += 1, std::numeric_limits<WChar>::min() + u;
+			return wc->cp += 1, INT32_MIN + u;
 		WChar v = (unsigned char) wc->cp[1];
 		if ((v & 0xC0) != 0x80)
 			goto error;
@@ -676,223 +670,236 @@ wconv_restore(WConv *wc, const char *p)
 	wc->cp = p;
 }
 
+typedef struct FirstBytes FirstBytes;
 struct FirstBytes {
 	bool vec[256];
 };
 
+typedef struct CSet CSet;
 struct CSet {
-	charset_t *charset = nullptr;
-	CSet(WConv_Encoding enc) {
-		int errcode = 0;
-		charset = charset_create(& errcode, MB_CUR_MAX, enc == UTF8);
-		// FIXME: Throw error if charset == nullptr
+	charset_t *charset;
+};
+
+static void
+cset_construct(CSet *cs, WConv_Encoding enc)
+{
+	int errcode = 0;
+	cs->charset = charset_create(&errcode, MB_CUR_MAX, enc == UTF8);
+	// FIXME: handle errcode or error if charset == nullptr
+}
+
+static void
+cset_destruct(CSet *cs)
+{
+	if (cs->charset) {
+		charset_free(cs->charset);
+		cs->charset = nullptr;
 	}
-	CSet(const CSet &) = delete;
-	CSet &operator=(const CSet &) = delete;
-	CSet(CSet &&cs): charset(cs.charset) { cs.charset = nullptr; }
-	CSet &operator=(CSet &&cs) { charset = cs.charset; cs.charset = nullptr; return *this; }
-	CSet &operator|=(const CSet &cs) {
-		charset_merge(charset, cs.charset);
-		return *this;
+}
+
+static CSet *
+cset_merge(CSet *cs, const CSet *othercs)
+{
+	charset_merge(cs->charset, othercs->charset);
+	return cs;
+}
+
+static CSet *
+cset_invert(CSet *cs)
+{
+	int errcode = 0;
+	// FIXME: check errcode and return value
+	charset_t *newset = charset_invert(cs->charset, &errcode);
+	charset_free(cs->charset);
+	cs->charset = newset;
+	return cs;
+}
+
+static CSet *
+cset_set(CSet *cs, WChar wclo, WChar wchi)
+{
+	charset_add_range(cs->charset, wclo, wchi);	// FIXME: check for errors
+	return cs;
+}
+
+static CSet *
+cset_set(CSet *cs, WChar wc, bool ignore_case = false)
+{
+	if (ignore_case)
+		charset_add_char_ic(cs->charset, wc);	// FIXME: check for errors
+	else
+		charset_add_char(cs->charset, wc);	// FIXME: check for errors
+	return cs;
+}
+
+static bool
+cset_test(const CSet *cs, WChar wc)
+{
+	return charset_in_set(cs->charset, wc);
+}
+
+static bool
+cset_cclass(CSet *cs, minrx_regcomp_flags_t flags, WConv_Encoding, const char *bp, const char *ep)
+{
+	int result = charset_add_cclass2(cs->charset, bp, ep);
+	if ((flags & MINRX_REG_ICASE) != 0) {
+		if (ep - bp == 5 && strncmp(bp, "lower", 5) == 0)
+			charset_add_cclass(cs->charset, "upper");	// FIXME: check errors
+		else if (ep - bp == 5 && strncmp(bp, "upper", 5) == 0)
+			charset_add_cclass(cs->charset, "lower");	// FIXME: check errors
 	}
-	~CSet() { if (charset) { charset_free(charset); charset = nullptr; } }
-	CSet &invert() {
-		int errcode = 0;
-		charset_t *newset = charset_invert(charset, &errcode); // FIXME: no error checking
-		charset_free(charset);
-		charset = newset;
-		return *this;
-	}
-	CSet &set(WChar wclo, WChar wchi) {
-		charset_add_range(charset, wclo, wchi);	// FIXME: no error checking
-		return *this;
-	}
-	CSet &set(WChar wc, bool ignore_case = false) {
-		if (ignore_case)
-			charset_add_char_ic(charset, wc);	// FIXME: no error checking
-		else
-			charset_add_char(charset, wc);	// FIXME: no error checking
-		return *this;
-	}
-	bool test(WChar wc) const {
-		return charset_in_set(charset, wc);
-	}
-	bool cclass(minrx_regcomp_flags_t flags, WConv_Encoding, const char *bp, const char *ep) {
-		int result = charset_add_cclass2(charset, bp, ep);
-		if ((flags & MINRX_REG_ICASE) != 0) {
-			if (strncmp(bp, "lower", 5) == 0)
-				charset_add_cclass(charset, "upper");	// FIXME: Add error checking
-			else if (strncmp(bp, "upper", 5) == 0)
-				charset_add_cclass(charset, "lower");	// FIXME: Add error checking
+	return result == CSET_SUCCESS;
+}
+
+static void
+cset_add_equiv(CSet *cs, int32_t equiv)
+{
+	charset_add_equiv(cs->charset, equiv);
+}
+
+static minrx_result_t
+cset_parse(CSet *cs, minrx_regcomp_flags_t flags, WConv_Encoding enc, WConv &wconv)
+{
+	WChar wc = wconv_nextchr(&wconv);
+	bool inv = wc == L'^';
+	if (inv)
+		wc = wconv_nextchr(&wconv);
+	for (bool first = true; first || wc != L']'; first = false) {
+		if (wc == End)
+			return MINRX_REG_EBRACK;
+		WChar wclo = wc, wchi = wc;
+		wc = wconv_nextchr(&wconv);
+		if (wclo == L'\\' && (flags & MINRX_REG_BRACK_ESCAPE) != 0) {
+			if (wc != End) {
+				wclo = wchi = wc;
+				wc = wconv_nextchr(&wconv);
+			} else {
+				return MINRX_REG_EESCAPE;
+			}
+		} else if (wclo == L'[') {
+			if (wc == L'.') {
+				wc = wconv_nextchr(&wconv);
+				wclo = wchi = wc;
+#ifdef CHARSET_NOT_YET
+				int32_t coll[2] = { wc, L'\0' };
+				charset_add_collate(cs->charset, coll);	// FIXME: check errors
+				if ((flags & MINRX_REG_ICASE) != 0) {
+					if (iswlower(wc))
+						coll[0] = towupper(wc);
+					else if (iswupper(wc))
+						coll[0] = towlower(wc);
+					charset_add_collate(cs->charset, coll);	// FIXME: check errors
+				}
+#endif
+				wc = wconv_nextchr(&wconv);
+				if (wc != L'.' || (wc = wconv_nextchr(&wconv)) != L']')
+					return MINRX_REG_ECOLLATE;
+				wc = wconv_nextchr(&wconv);
+			} else if (wc == L':') {
+				const char *bp = wconv_ptr(&wconv), *ep = bp;
+				do
+					ep = wconv_ptr(&wconv), wc = wconv_nextchr(&wconv);
+				while (wc != End && wc != L':');
+				if (wc != L':')
+					return MINRX_REG_ECTYPE;
+				wc = wconv_nextchr(&wconv);
+				if (wc != L']')
+					return MINRX_REG_ECTYPE;
+				wc = wconv_nextchr(&wconv);
+				if (cset_cclass(cs, flags, enc, bp, ep))
+					continue;
+				return MINRX_REG_ECTYPE;
+			} else if (wc == L'=') {
+				wc = wconv_nextchr(&wconv);
+				wclo = wchi = wc;
+				cset_add_equiv(cs, wc);	// FIXME: check errors
+				if ((flags & MINRX_REG_ICASE) != 0) {
+					if (iswlower(wc))
+						cset_add_equiv(cs, towupper(wc));	// FIXME: check errors
+					else if (iswupper(wc))
+						cset_add_equiv(cs, towlower(wc));	// FIXME: check errors;
+				}
+				wc = wconv_nextchr(&wconv);
+				if (wc != L'=' || (wc = wconv_nextchr(&wconv)) != L']')
+					return MINRX_REG_ECOLLATE;
+				wc = wconv_nextchr(&wconv);
+			}
 		}
-		return result == CSET_SUCCESS;
-	}
-	void add_equiv(int32_t equiv) {
-		wchar_t wcs_in[2];
-		wchar_t wcs[2];
-		wchar_t abuf[100], wbuf[100];
-		wcs_in[0] = equiv;
-		wcs_in[1] = 0;
-		wcsxfrm(abuf, wcs_in, 99);
-		wcs[1] = 0;
-		for (wchar_t u = 1; u <= WCharMax; ++u) {
-			wcs[0] = u;
-			wcsxfrm(wbuf, wcs, 99);
-			if (abuf[0] == wbuf[0])
-				set(u);
-		}
-	}
-	minrx_result_t parse(minrx_regcomp_flags_t flags, WConv_Encoding enc, WConv &wconv) {
-		WChar wc = wconv_nextchr(&wconv);
-		bool inv = wc == L'^';
-		if (inv)
+		bool range = false;
+		if (wc == L'-') {
+			const char *save = wconv_save(&wconv);
 			wc = wconv_nextchr(&wconv);
-		for (bool first = true; first || wc != L']'; first = false) {
 			if (wc == End)
 				return MINRX_REG_EBRACK;
-			WChar wclo = wc, wchi = wc;
-			wc = wconv_nextchr(&wconv);
-			if (wclo == L'\\' && (flags & MINRX_REG_BRACK_ESCAPE) != 0) {
-				if (wc != End) {
-					wclo = wchi = wc;
-					wc = wconv_nextchr(&wconv);
-				} else {
-					return MINRX_REG_EESCAPE;
-				}
-			} else if (wclo == L'[') {
-				if (wc == L'.') {
-					wc = wconv_nextchr(&wconv);
-					wclo = wchi = wc;
-#ifdef CHARSET_NOT_YET
-					int32_t coll[2] = { wc, L'\0' };
-					charset_add_collate(charset, coll);	// FIXME: No error checking
-					if ((flags & MINRX_REG_ICASE) != 0) {
-						if (iswlower(wc))
-							coll[0] = towupper(wc);
-						else if (iswupper(wc))
-							coll[0] = towlower(wc);
-						charset_add_collate(charset, coll);	// FIXME: No error checking
-					}
-#endif
-					wc = wconv_nextchr(&wconv);
-					if (wc != L'.' || (wc = wconv_nextchr(&wconv)) != L']')
-						return MINRX_REG_ECOLLATE;
-					wc = wconv_nextchr(&wconv);
-				} else if (wc == L':') {
-					const char *bp = wconv_ptr(&wconv), *ep = bp;
-					do
-						ep = wconv_ptr(&wconv), wc = wconv_nextchr(&wconv);
-					while (wc != End && wc != L':');
-					if (wc != L':')
-						return MINRX_REG_ECTYPE;
-					wc = wconv_nextchr(&wconv);
-					if (wc != L']')
-						return MINRX_REG_ECTYPE;
-					wc = wconv_nextchr(&wconv);
-					if (cclass(flags, enc, bp, ep))
-						continue;
-					return MINRX_REG_ECTYPE;
-				} else if (wc == L'=') {
-					wc = wconv_nextchr(&wconv);
-					wclo = wchi = wc;
-					charset_add_equiv(charset, wc);	// FIXME: No error checking
-					if ((flags & MINRX_REG_ICASE) != 0) {
-						if (iswlower(wc))
-							charset_add_equiv(charset, towupper(wc));	// FIXME: no error checking
-						else if (iswupper(wc))
-							charset_add_equiv(charset, towlower(wc));	// FIXME: no error checking
-					}
-					wc = wconv_nextchr(&wconv);
-					if (wc != L'=' || (wc = wconv_nextchr(&wconv)) != L']')
-						return MINRX_REG_ECOLLATE;
-					wc = wconv_nextchr(&wconv);
-				}
-			}
-			bool range = false;
-			if (wc == L'-') {
-				const char *save = wconv_save(&wconv);
+			if (wc != L']') {
+				wchi = wc;
 				wc = wconv_nextchr(&wconv);
-				if (wc == End)
-					return MINRX_REG_EBRACK;
-				if (wc != L']') {
-					wchi = wc;
-					wc = wconv_nextchr(&wconv);
-					if (wchi == L'\\' && (flags & MINRX_REG_BRACK_ESCAPE) != 0) {
-						if (wc != End) {
-							wchi = wc;
-							wc = wconv_nextchr(&wconv);
-						} else {
-							return MINRX_REG_EESCAPE;
-						}
-					} else if (wchi == L'[') {
-						if (wc == L'.') {
-							wchi = wconv_nextchr(&wconv);
-							wc = wconv_nextchr(&wconv);
-							if (wc != L'.' || (wc = wconv_nextchr(&wconv)) != L']')
-								return MINRX_REG_ECOLLATE;
-							wc = wconv_nextchr(&wconv);
-						} else if (wc == L':' || wc == L'=') {
-							return MINRX_REG_ERANGE; // can't be range endpoint
-						}
+				if (wchi == L'\\' && (flags & MINRX_REG_BRACK_ESCAPE) != 0) {
+					if (wc != End) {
+						wchi = wc;
+						wc = wconv_nextchr(&wconv);
+					} else {
+						return MINRX_REG_EESCAPE;
 					}
-					range = true;
-				} else {
-					wconv_restore(&wconv, save);
-					wc = L'-';
-				}
-			}
-			if (wclo > wchi || (wclo != wchi && (wclo < 0 || wchi < 0)))
-				return MINRX_REG_ERANGE;
-			if (wclo >= 0) {
-				set(wclo, wchi);
-				if ((flags & MINRX_REG_ICASE) != 0) {
-					for (WChar wc = wclo; wc <= wchi; ++wc) {
-						set(enc == Byte ? tolower(wc) : towlower(wc));
-						set(enc == Byte ? toupper(wc) : towupper(wc));
+				} else if (wchi == L'[') {
+					if (wc == L'.') {
+						wchi = wconv_nextchr(&wconv);
+						wc = wconv_nextchr(&wconv);
+						if (wc != L'.' || (wc = wconv_nextchr(&wconv)) != L']')
+							return MINRX_REG_ECOLLATE;
+						wc = wconv_nextchr(&wconv);
+					} else if (wc == L':' || wc == L'=') {
+						return MINRX_REG_ERANGE; // can't be range endpoint
 					}
 				}
+				range = true;
+			} else {
+				wconv_restore(&wconv, save);
+				wc = L'-';
 			}
-			if (range && wc == L'-' && wconv_lookahead(&wconv) != L']')
-				return MINRX_REG_ERANGE;
 		}
-		if (inv) {
-			if ((flags & MINRX_REG_NEWLINE) != 0)
-				set(L'\n');
-			invert();
+		if (wclo > wchi || (wclo != wchi && (wclo < 0 || wchi < 0)))
+			return MINRX_REG_ERANGE;
+		if (wclo >= 0) {
+			cset_set(cs, wclo, wchi);
+			if ((flags & MINRX_REG_ICASE) != 0) {
+				for (WChar wc = wclo; wc <= wchi; ++wc) {
+					cset_set(cs, enc == Byte ? tolower(wc) : towlower(wc));
+					cset_set(cs, enc == Byte ? toupper(wc) : towupper(wc));
+				}
+			}
 		}
-		return MINRX_REG_SUCCESS;
+		if (range && wc == L'-' && wconv_lookahead(&wconv) != L']')
+			return MINRX_REG_ERANGE;
 	}
-	static unsigned int utfprefix(WChar wc) {
-		if (wc < 0x80)
-			return wc;
-		if (wc < 0x800)
-			return 0xC0 + (wc >> 6);
-		if (wc < 0x10000)
-			return 0xE0 + (wc >> 12);
-		if (wc < 0x100000)
-			return 0xF0 + (wc >> 18);
-		return 0xF4;
+	if (inv) {
+		if ((flags & MINRX_REG_NEWLINE) != 0)
+			cset_set(cs, L'\n');
+		cset_invert(cs);
 	}
-	bool
-	firstbytes(FirstBytes *fb, int32_t *fu, WConv_Encoding e) const {
-		for (int i = 0; i < 256; i++)
-			fb->vec[i] = false;
-		if (e == Byte || e == UTF8) {
-			int errcode = 0;
-			charset_firstbytes_t bytes = charset_firstbytes(charset, &errcode);
-			for (int i = 0; i < MAX_FIRSTBYTES; i++)
-				fb->vec[i] = bytes.bytes[i];
-		} else {
-			return false;
-		}
-		int n = 0, u = -1;
-		for (int i = 0; i < 256; ++i)
-			if (fb->vec[i])
-				++n, u = i;
-		*fu = (n == 1) ? u : -1;
-		return true;
+	return MINRX_REG_SUCCESS;
+}
+
+bool
+cset_firstbytes(const CSet *cs, FirstBytes *fb, int32_t *fu, WConv_Encoding e)
+{
+	for (int i = 0; i < 256; i++)
+		fb->vec[i] = false;
+	if (e == Byte || e == UTF8) {
+		int errcode = 0;
+		charset_firstbytes_t bytes = charset_firstbytes(cs->charset, &errcode);
+		for (int i = 0; i < MAX_FIRSTBYTES; i++)
+			fb->vec[i] = bytes.bytes[i];
+	} else {
+		return false;
 	}
-};
+	int n = 0, u = -1;
+	for (int i = 0; i < 256; ++i)
+		if (fb->vec[i])
+			++n, u = i;
+	*fu = (n == 1) ? u : -1;
+	return true;
+}
 
 typedef size_t NInt;
 
@@ -928,13 +935,81 @@ struct Node {
 	NInt nstk;
 };
 
+typedef struct CSets CSets;
+struct CSets {
+	CSet *data;
+	size_t alloc;
+	size_t count;
+};
+
+static void
+csets_construct(CSets *csets)
+{
+	csets->data = nullptr;
+	csets->alloc = 0;
+	csets->count = 0;
+}
+
+static bool
+csets_emplace_back(CSets *csets, WConv_Encoding e)
+{
+	if (csets->alloc == 0) {
+		CSet *newdata = (CSet *) malloc(sizeof (CSet));
+		if (!newdata)
+			return false;
+		csets->data = newdata;
+		csets->alloc = 1;
+	} else if (csets->alloc == csets->count) {
+		size_t newalloc = csets->alloc * 2;
+		// N.B. here we are relying on CSet being POD to avoid calling constructors or destructors
+		CSet *newdata = (CSet *) realloc((void *) csets->data, newalloc * sizeof (CSet));
+		if (!newdata)
+			return false;
+		csets->data = newdata;
+		csets->alloc *= 2;
+	}
+	cset_construct(&csets->data[csets->count++], e);
+	return true;
+}
+
+static void
+csets_clear(CSets *csets)
+{
+	if (csets->data) {
+		for (size_t i = 0, n = csets->count; i < n; i++)
+			cset_destruct(&csets->data[i]);
+		free((void *) csets->data);
+		csets->data = nullptr;
+		csets->alloc = 0;
+		csets->count = 0;
+	}
+}
+
+static const CSet *
+csets_aref(const CSets *csets, NInt i)
+{
+	return &csets->data[i];
+}
+
+static CSet *
+csets_back(CSets *csets)
+{
+	return &csets->data[csets->count - 1];
+}
+
+static size_t
+csets_size(CSets *csets)
+{
+	return csets->count;
+}
+
 struct Regexp {
 	WConv_Encoding enc;
 	minrx_result_t err;
-	const std::vector<CSet> csets;
+	CSets csets;
 	const Node *nodes;
 	size_t nnode;
-	std::optional<const CSet> firstcset;
+	CSet *firstcset;
 	bool firstvalid;
 	FirstBytes firstbytes;
 	int32_t firstunique;
@@ -943,6 +1018,11 @@ struct Regexp {
 	size_t nsub;
 	~Regexp() {
 		free((void *) nodes);
+		csets_clear(&csets);
+		if (firstcset) {
+			cset_destruct(firstcset);
+			free((void *) firstcset);
+		}
 	}
 };
 
@@ -1067,18 +1147,24 @@ struct Compile {
 	WConv_Encoding enc;
 	WConv wconv;
 	WChar wc;
-	std::vector<CSet> csets;
-	std::optional<size_t> dot;
-	std::optional<size_t> esc_s;
-	std::optional<size_t> esc_S;
-	std::optional<size_t> esc_w;
-	std::optional<size_t> esc_W;
+	CSets csets;
+	size_t dot;
+	size_t esc_s;
+	size_t esc_S;
+	size_t esc_w;
+	size_t esc_W;
 	NInt nmin = 0;
 	NInt nsub = 0;
 	NodePool *np = 0;
 	Compile(WConv_Encoding e, const char *bp, const char *ep, minrx_regcomp_flags_t flags): flags(flags), enc(e) {
 		wconv_construct(&wconv, e, bp, ep);
 		wc = wconv_nextchr(&wconv);
+		csets_construct(&csets);
+		dot = -1;
+		esc_s = -1;
+		esc_S = -1;
+		esc_w = -1;
+		esc_W = -1;
 	}
 	bool num(NInt &n, WChar &wc) {
 		auto satmul = [](NInt x, NInt y) -> NInt {
@@ -1101,77 +1187,93 @@ struct Compile {
 		n = v;
 		return true;
 	}
-	typedef std::tuple<NodeList, size_t, bool, minrx_result_t> Subexp;
+	struct Subexp {
+		NodeList nodes;
+		size_t maxstk;
+		bool hasmin;
+		minrx_result_t err;
+	};
 	Subexp alt(bool nested, NInt nstk) {
-		auto [lhs, lhmaxstk, lhasmin, err] = cat(nested, nstk);
-		if (err)
-			return {lhs, lhmaxstk, lhasmin, err};
+		Subexp lh = cat(nested, nstk);
+		if (lh.err != MINRX_REG_SUCCESS)
+			return lh;
 		if (wc == L'|') {
-			for (auto l = lhs.first; l != nullptr; l = l->next)
+			for (auto l = lh.nodes.first; l != nullptr; l = l->next)
 				l->node.nstk += 1;
-			std::vector<Subexp> alts;
+			Subexp altspace[16], *alts = altspace;
+			size_t alloc = 16, count = 0;
 			while (wc == L'|') {
 				wc = wconv_nextchr(&wconv);
-				alts.push_back(cat(nested, nstk + 1));
+				if (count == alloc) {
+					alloc *= 2;
+					if (alts == altspace) {
+						Subexp *newalts = (Subexp *) malloc(alloc * sizeof (Subexp));	// FIXME: check return value
+						memcpy((void *) newalts, (void *) alts, count * sizeof (Subexp));
+						alts = newalts;
+					} else {
+						Subexp *newalts = (Subexp *) realloc((void *) alts, alloc * sizeof (Subexp));
+						alts = newalts;
+					}
+				}
+				alts[count++] = cat(nested, nstk + 1);
 			}
-			auto [rhs, rhmaxstk, rhasmin, err] = alts.back();
-			if (err)
-				return {rhs, rhmaxstk, rhasmin, err};
-			if (!emplace_first(&np, &rhs, Node::Goto, rhs.size, rhs.size + 1, nstk + 1))
+			Subexp rh = alts[count - 1];
+			if (rh.err != MINRX_REG_SUCCESS)
+				return rh;
+			if (!emplace_first(&np, &rh.nodes, Node::Goto, rh.nodes.size, rh.nodes.size + 1, nstk + 1))
 				return {empty(), 0, false, MINRX_REG_ESPACE};
-			alts.pop_back();
-			while (!alts.empty()) {
-				auto [mhs, mhmaxstk, mhasmin, _] = alts.back();
-				alts.pop_back();
-				auto mhsize = mhs.size;
-				concatmove(&mhs, &rhs);
-				rhmaxstk = MAX(mhmaxstk, rhmaxstk);
-				rhasmin |= mhasmin;
-				rhs = mhs;
-				if (!emplace_first(&np, &rhs, Node::Goto, mhsize, rhs.size + 1, nstk + 1))
+			--count;
+			while (count > 0) {
+				auto mh = alts[--count];
+				auto mhsize = mh.nodes.size;
+				concatmove(&mh.nodes, &rh.nodes);
+				rh.maxstk = MAX(mh.maxstk, rh.maxstk);
+				rh.hasmin |= mh.hasmin;
+				rh.nodes = mh.nodes;
+				if (!emplace_first(&np, &rh.nodes, Node::Goto, mhsize, rh.nodes.size + 1, nstk + 1))
 					return {empty(), 0, false, MINRX_REG_ESPACE};
 			}
-			if (!emplace_first(&np, &lhs, Node::Fork, lhs.size, 0, nstk + 1))
+			if (alts != altspace)
+				free((void *) alts);
+			if (!emplace_first(&np, &lh.nodes, Node::Fork, lh.nodes.size, 0, nstk + 1))
 				return {empty(), 0, false, MINRX_REG_ESPACE};
-			concatmove(&lhs, &rhs);
-			lhmaxstk = MAX(lhmaxstk, rhmaxstk);
-			lhasmin |= rhasmin;
-			if (!emplace_final(&np, &lhs, Node::Join, lhs.size - 1, 0, nstk + 1))
+			concatmove(&lh.nodes, &rh.nodes);
+			lh.maxstk = MAX(lh.maxstk, rh.maxstk);
+			lh.hasmin |= rh.hasmin;
+			if (!emplace_final(&np, &lh.nodes, Node::Join, lh.nodes.size - 1, 0, nstk + 1))
 				return {empty(), 0, false, MINRX_REG_ESPACE};
 		}
-		return {lhs, lhmaxstk, lhasmin, MINRX_REG_SUCCESS};
+		return {lh.nodes, lh.maxstk, lh.hasmin, MINRX_REG_SUCCESS};
 	}
 	Subexp cat(bool nested, NInt nstk) {
-		auto [lhs, lhmaxstk, lhasmin, err] = rep(nested, nstk);
-		if (err)
-			return {lhs, lhmaxstk, lhasmin, err};
-		while (wc != End && wc != L'|' && (wc != L')' || !nested)) {
-			auto [rhs, rhmaxstk, rhasmin, err] = rep(nested, nstk);
-			if (err)
-				return {rhs, rhmaxstk, rhasmin, err};
-			concatmove(&lhs, &rhs);
-			lhmaxstk = MAX(lhmaxstk, rhmaxstk);
-			lhasmin |= rhasmin;
-		}
-		return {lhs, lhmaxstk, lhasmin, MINRX_REG_SUCCESS};
-	}
-	Subexp minimize(const Subexp &lh, NInt nstk) {
-		if (std::get<minrx_result_t>(lh))
+		Subexp lh = rep(nested, nstk);
+		if (lh.err != MINRX_REG_SUCCESS)
 			return lh;
-		auto [nodes, maxstk, hasmin, err] = lh;
-		for (auto n = nodes.first; n != nullptr; n = n->next)
+		while (wc != End && wc != L'|' && (wc != L')' || !nested)) {
+			Subexp rh = rep(nested, nstk);
+			if (rh.err != MINRX_REG_SUCCESS)
+				return rh;
+			concatmove(&lh.nodes, &rh.nodes);
+			lh.maxstk = MAX(lh.maxstk, rh.maxstk);
+			lh.hasmin |= rh.hasmin;
+		}
+		return lh;
+	}
+	Subexp minimize(Subexp lh, NInt nstk) {
+		if (lh.err != MINRX_REG_SUCCESS)
+			return lh;
+		for (auto n = lh.nodes.first; n != nullptr; n = n->next)
 			n->node.nstk += 1;
-		if (!emplace_first(&np, &nodes, Node::MinL, 0, 0, nstk + 1) || !emplace_final(&np, &nodes, Node::MinR, 0, 0, nstk))
+		if (!emplace_first(&np, &lh.nodes, Node::MinL, 0, 0, nstk + 1) || !emplace_final(&np, &lh.nodes, Node::MinR, 0, 0, nstk))
 			return {empty(), 0, false, MINRX_REG_ESPACE};
 		nmin = MAX(nmin, (size_t) 1);
-		return {nodes, maxstk + 1, true, err};
+		return {lh.nodes, lh.maxstk + 1, true, lh.err};
 	}
 	void minraise(Subexp &lh) {
-		if (std::get<minrx_result_t>(lh))
+		if (lh.err != MINRX_REG_SUCCESS)
 			return;
-		auto &[nodes, maxstk, hasmin, err] = lh;
 		NInt maxlevel = 0;
-		for (auto n = nodes.first; n != nullptr; n = n->next)
+		for (auto n = lh.nodes.first; n != nullptr; n = n->next)
 			switch (n->node.type) {
 			case Node::MinB:
 			case Node::MinL:
@@ -1183,28 +1285,27 @@ struct Compile {
 			}
 		nmin = MAX(nmin, maxlevel + 1);
 	}
-	Subexp mkrep(const Subexp &lh, bool optional, bool infinite, NInt nstk) {
-		if (std::get<minrx_result_t>(lh))
+	Subexp mkrep(Subexp lh, bool optional, bool infinite, NInt nstk) {
+		if (lh.err != MINRX_REG_SUCCESS)
 			return lh;
-		auto [lhs, lhmaxstk, lhasmin, err] = lh;
 		if (optional && !infinite) {
-			for (auto l = lhs.first; l != nullptr; l = l->next)
+			for (auto l = lh.nodes.first; l != nullptr; l = l->next)
 				l->node.nstk += 2;
-			auto lhsize = lhs.size;
-			if (!emplace_first(&np, &lhs, Node::Skip, lhsize, 0, nstk + 2))
+			auto lhsize = lh.nodes.size;
+			if (!emplace_first(&np, &lh.nodes, Node::Skip, lhsize, 0, nstk + 2))
 				return {empty(), 0, false, MINRX_REG_ESPACE};
-			return {lhs, lhmaxstk + 2, lhasmin, MINRX_REG_SUCCESS};
+			return {lh.nodes, lh.maxstk + 2, lh.hasmin, MINRX_REG_SUCCESS};
 		} else {
-			for (auto l = lhs.first; l != nullptr; l = l->next)
+			for (auto l = lh.nodes.first; l != nullptr; l = l->next)
 				l->node.nstk += 3;
-			auto lhsize = lhs.size;
-			if (!emplace_first(&np, &lhs, Node::Loop, lhsize, (NInt) optional, nstk + 3) || !emplace_final(&np, &lhs, Node::Next, lhsize, (NInt) infinite, nstk))
+			auto lhsize = lh.nodes.size;
+			if (!emplace_first(&np, &lh.nodes, Node::Loop, lhsize, (NInt) optional, nstk + 3) || !emplace_final(&np, &lh.nodes, Node::Next, lhsize, (NInt) infinite, nstk))
 				return {empty(), 0, false, MINRX_REG_ESPACE};
-			return {lhs, lhmaxstk + 3, lhasmin, MINRX_REG_SUCCESS};
+			return {lh.nodes, lh.maxstk + 3, lh.hasmin, MINRX_REG_SUCCESS};
 		}
 	}
-	Subexp mkrep(const Subexp &lh, NInt m, NInt n, NInt nstk) {
-		if (std::get<minrx_result_t>(lh))
+	Subexp mkrep(Subexp lh, NInt m, NInt n, NInt nstk) {
+		if (lh.err != MINRX_REG_SUCCESS)
 			return lh;
 		if ((m != (NInt) -1 && m > RE_DUP_MAX) || (n != (NInt) -1 && n > RE_DUP_MAX) || m > n)
 			return {{}, 0, false, MINRX_REG_BADBR};
@@ -1218,47 +1319,46 @@ struct Compile {
 			return lh;
 		if (m == 1 && n == (NInt) -1)
 			return mkrep(lh, false, true, nstk);
-		auto [lhs, lhmaxstk, lhasmin, _] = lh;
-		auto [rhs, rhmaxstk, rhasmin,__] = lh;
+		Subexp rh = lh;
 		NInt k;
-		lhs = empty();
-		if (!concatcopy(&np, &lhs, &rhs))	// force initial lhs to be a copy
+		lh.nodes = empty();
+		if (!concatcopy(&np, &lh.nodes, &rh.nodes))	// force initial lhs to be a copy
 			return {empty(), 0, false, MINRX_REG_ESPACE};
 		for (k = 1; k < m; ++k)
-			if (!concatcopy(&np, &lhs, &rhs))
+			if (!concatcopy(&np, &lh.nodes, &rh.nodes))
 				return {empty(), 0, false, MINRX_REG_ESPACE};
 		if (n != (NInt) -1 && k < n) {
-			lhmaxstk += 2;
-			rhmaxstk += 2;
-			for (auto r = rhs.first; r != nullptr; r = r->next)
+			lh.maxstk += 2;
+			rh.maxstk += 2;
+			for (auto r = rh.nodes.first; r != nullptr; r = r->next)
 				r->node.nstk += 2;
-			auto rhsize = rhs.size;
-			if (!emplace_first(&np, &rhs, Node::Skip, rhsize, 1, nstk + 2))
+			auto rhsize = rh.nodes.size;
+			if (!emplace_first(&np, &rh.nodes, Node::Skip, rhsize, 1, nstk + 2))
 				return {empty(), 0, false, MINRX_REG_ESPACE};
 			for (; k < n; ++k)
-				if (!concatcopy(&np, &lhs, &rhs))
+				if (!concatcopy(&np, &lh.nodes, &rh.nodes))
 					return {empty(), 0, false, MINRX_REG_ESPACE};
 		}
 		if (n == (NInt) -1) {
-			lhmaxstk += 3;
-			rhmaxstk += 3;
-			for (auto r = rhs.first; r != nullptr; r = r->next)
+			lh.maxstk += 3;
+			rh.maxstk += 3;
+			for (auto r = rh.nodes.first; r != nullptr; r = r->next)
 				r->node.nstk += 3;
-			auto rhsize = rhs.size;
-			if (!emplace_first(&np, &rhs, Node::Loop, rhsize, 1, nstk + 3) || !emplace_final(&np, &rhs, Node::Next, rhsize, 1, nstk))
+			auto rhsize = rh.nodes.size;
+			if (!emplace_first(&np, &rh.nodes, Node::Loop, rhsize, 1, nstk + 3) || !emplace_final(&np, &rh.nodes, Node::Next, rhsize, 1, nstk))
 				return {empty(), 0, false, MINRX_REG_ESPACE};
-			concatmove(&lhs, &rhs);
+			concatmove(&lh.nodes, &rh.nodes);
 		}
 		if (m == 0)
-			return mkrep({lhs, rhmaxstk, rhasmin, MINRX_REG_SUCCESS}, true, false, nstk);
+			return mkrep({lh.nodes, rh.maxstk, rh.hasmin, MINRX_REG_SUCCESS}, true, false, nstk);
 		else
-			return {lhs, rhmaxstk, rhasmin, MINRX_REG_SUCCESS};
+			return {lh.nodes, rh.maxstk, rh.hasmin, MINRX_REG_SUCCESS};
 	}
 	Subexp rep(bool nested, NInt nstk) {
 		auto lh = chr(nested, nstk);
-		if (std::get<minrx_result_t>(lh))
+		if (lh.err != MINRX_REG_SUCCESS)
 			return lh;
-		auto hasmin = std::get<bool>(lh);
+		auto hasmin = lh.hasmin;
 		for (;;) {
 			bool infinite = false, minimal = (flags & MINRX_REG_MINIMAL) != 0, optional = false;
 			switch (wc) {
@@ -1276,11 +1376,11 @@ struct Compile {
 					minraise(lh);
 				lh = mkrep(minimal ? minimize(lh, nstk) : lh, optional, infinite, nstk);
 			comout:	if (minimal) {
-					if (!emplace_first(&np, &std::get<0>(lh), Node::MinB, 0, 0, nstk))
+					if (!emplace_first(&np, &lh.nodes, Node::MinB, 0, 0, nstk))
 						return {empty(), 0, false, MINRX_REG_ESPACE};
 					hasmin = true;
 				}
-				std::get<bool>(lh) = hasmin;
+				lh.hasmin = hasmin;
 				continue;
 			case L'{':
 				if ((flags & MINRX_REG_BRACE_COMPAT) == 0
@@ -1344,9 +1444,9 @@ struct Compile {
 				if (!emplace_first(&np, &lhs, (NInt) wc, 0, 0, nstk))
 					return {empty(), 0, false, MINRX_REG_ESPACE};
 			} else {
-				csets.emplace_back(enc);
-				csets.back().set(wc, true);
-				if (!emplace_final(&np, &lhs, Node::CSet, csets.size() - 1, 0, nstk))
+				csets_emplace_back(&csets, enc);	// FIXME: check for error
+				cset_set(csets_back(&csets), wc, true);
+				if (!emplace_final(&np, &lhs, Node::CSet, csets_size(&csets) - 1, 0, nstk))
 					return {empty(), 0, false, MINRX_REG_ESPACE};
 			}
 			wc = wconv_nextchr(&wconv);
@@ -1362,22 +1462,23 @@ struct Compile {
 			return {empty(), 0, false, MINRX_REG_BADRPT};
 		case L'[':
 			lhmaxstk = nstk;
-			if (!emplace_final(&np, &lhs, Node::CSet, csets.size(), 0, nstk))
+			if (!emplace_final(&np, &lhs, Node::CSet, csets_size(&csets), 0, nstk))
 				return {empty(), 0, false, MINRX_REG_ESPACE};
-			if (auto err = csets.emplace_back(enc).parse(flags, enc, wconv))
+			csets_emplace_back(&csets, enc);		// FIXME: check for error
+			if (auto err = cset_parse(csets_back(&csets), flags, enc, wconv))
 				return {empty(), 0, false, err};
 			wc = wconv_nextchr(&wconv);
 			break;
 		case L'.':
-			if (!dot.has_value()) {
-				dot = csets.size();
-				csets.emplace_back(enc);
+			if (dot == (size_t) -1) {
+				dot = csets_size(&csets);
+				csets_emplace_back(&csets, enc);
 				if ((flags & MINRX_REG_NEWLINE) != 0)
-					csets.back().set(L'\n');
-				csets.back().invert();
+					cset_set(csets_back(&csets), L'\n');
+				cset_invert(csets_back(&csets));
 			}
 			lhmaxstk = nstk;
-			if (!emplace_final(&np, &lhs, Node::CSet, *dot, 0, nstk))
+			if (!emplace_final(&np, &lhs, Node::CSet, dot, 0, nstk))
 				return {empty(), 0, false, MINRX_REG_ESPACE};
 			wc = wconv_nextchr(&wconv);
 			break;
@@ -1436,49 +1537,53 @@ struct Compile {
 			case L's':
 				if ((flags & MINRX_REG_EXTENSIONS_GNU) == 0)
 					goto normal;
-				if (!esc_s.has_value()) {
-					esc_s = csets.size();
+				if (esc_s == (size_t) -1) {
+					esc_s = csets_size(&csets);
 					WConv wc;
 					wconv_constructz(&wc, enc, "[:space:]]");
-					csets.emplace_back(enc).parse(flags, enc, wc);
+					csets_emplace_back(&csets, enc);		// FIXME: check for error
+					cset_parse(csets_back(&csets), flags, enc, wc);
 				}
-				if (!emplace_final(&np, &lhs, Node::CSet, *esc_s, 0, nstk))
+				if (!emplace_final(&np, &lhs, Node::CSet, esc_s, 0, nstk))
 					return {empty(), 0, false, MINRX_REG_ESPACE};
 				break;
 			case L'S':
 				if ((flags & MINRX_REG_EXTENSIONS_GNU) == 0)
 					goto normal;
-				if (!esc_S.has_value()) {
-					esc_S = csets.size();
+				if (esc_S == (size_t) -1) {
+					esc_S = csets_size(&csets);
 					WConv wc;
 					wconv_constructz(&wc, enc, "^[:space:]]");
-					csets.emplace_back(enc).parse(flags, enc, wc);
+					csets_emplace_back(&csets, enc);		// FIXME: check for error
+					cset_parse(csets_back(&csets), flags, enc, wc);
 				}
-				if (!emplace_final(&np, &lhs, Node::CSet, *esc_S, 0, nstk))
+				if (!emplace_final(&np, &lhs, Node::CSet, esc_S, 0, nstk))
 					return {empty(), 0, false, MINRX_REG_ESPACE};
 				break;
 			case L'w':
 				if ((flags & MINRX_REG_EXTENSIONS_GNU) == 0)
 					goto normal;
-				if (!esc_w.has_value()) {
-					esc_w = csets.size();
+				if (esc_w == (size_t) -1) {
+					esc_w = csets_size(&csets);
 					WConv wc;
 					wconv_constructz(&wc, enc, "[:alnum:]_]");
-					csets.emplace_back(enc).parse(flags, enc, wc);
+					csets_emplace_back(&csets, enc);		// FIXME: check for error
+					cset_parse(csets_back(&csets), flags, enc, wc);
 				}
-				if (!emplace_final(&np, &lhs, Node::CSet, *esc_w, 0, nstk))
+				if (!emplace_final(&np, &lhs, Node::CSet, esc_w, 0, nstk))
 					return {empty(), 0, false, MINRX_REG_ESPACE};
 				break;
 			case L'W':
 				if ((flags & MINRX_REG_EXTENSIONS_GNU) == 0)
 					goto normal;
-				if (!esc_W.has_value()) {
-					esc_W = csets.size();
+				if (esc_W == (size_t) -1) {
+					esc_W = csets_size(&csets);
 					WConv wc;
 					wconv_constructz(&wc, enc, "^[:alnum:]_]");
-					csets.emplace_back(enc).parse(flags, enc, wc);
+					csets_emplace_back(&csets, enc);		// FIXME: check for error
+					cset_parse(csets_back(&csets), flags, enc, wc);
 				}
-				if (!emplace_final(&np, &lhs, Node::CSet, *esc_W, 0, nstk))
+				if (!emplace_final(&np, &lhs, Node::CSet, esc_W, 0, nstk))
 					return {empty(), 0, false, MINRX_REG_ESPACE};
 				break;
 			case End:
@@ -1493,7 +1598,11 @@ struct Compile {
 				NInt n = ++nsub;
 				wc = wconv_nextchr(&wconv);
 				minrx_result_t err;
-				std::tie(lhs, lhmaxstk, lhasmin, err) = alt(true, nstk + 1);
+				Subexp lh = alt(true, nstk + 1);
+				lhs = lh.nodes;
+				lhmaxstk = lh.maxstk;
+				lhasmin = lh.hasmin;
+				err = lh.err;
 				if (err)
 					return {lhs, lhmaxstk, lhasmin, err};
 				if (wc != L')')
@@ -1514,20 +1623,20 @@ struct Compile {
 		}
 		return {lhs, lhmaxstk, lhasmin, MINRX_REG_SUCCESS};
 	}
-	std::optional<CSet> firstclosure(const Node *nodes, NInt nnode) {
+	CSet *firstclosure(const Node *nodes, NInt nnode) {
 		if (nnode == 0)
-			return {};
+			return nullptr;
 		QSet epsq, epsv, firsts;
 		if (!qset_construct(&epsq, nnode))
-			return {};
+			return nullptr;
 		if (!qset_construct(&epsv, nnode)) {
 			qset_destruct(&epsq);
-			return {};
+			return nullptr;
 		}
 		if (!qset_construct(&firsts, nnode)) {
 			qset_destruct(&epsq);
 			qset_destruct(&epsv);
-			return {};
+			return nullptr;
 		}
 		auto add = [&epsq, &epsv](NInt n) { if (!qset_contains(&epsv, n)) { qset_insert(&epsq, n); qset_insert(&epsv, n); } };
 		qset_insert(&epsq, 0);
@@ -1566,60 +1675,60 @@ struct Compile {
 					break;
 				}
 		} while (!qset_empty(&epsq));
-		CSet cs(enc);
+		CSet *cs = (CSet *) malloc(sizeof (CSet));
+		cset_construct(cs, enc);
 		while (!qset_empty(&firsts)) {
 			auto k = qset_remove(&firsts);
 			auto t = nodes[k].type;
 			if (t <= WCharMax)
-				cs.set(t);
+				cset_set(cs, t);
 			else
-				cs |= csets[nodes[k].args[0]];
+				cset_merge(cs, csets_aref(&csets, nodes[k].args[0]));
 		}
 		qset_destruct(&firsts);
 		qset_destruct(&epsv);
 		qset_destruct(&epsq);
 		return cs;
 	}
-	bool
-	firstbytes(FirstBytes *fb, int32_t *fu, WConv_Encoding e, const std::optional<CSet>& firstcset) {
-		if (!firstcset.has_value())
+	bool firstbytes(FirstBytes *fb, int32_t *fu, WConv_Encoding e, const CSet *firstcset) {
+		if (!firstcset)
 			return false;
-		return firstcset->firstbytes(fb, fu, e);
+		return cset_firstbytes(firstcset, fb, fu, e);
 	}
 	Regexp *compile() {
 		Node *nodes = nullptr;
 		NInt nnode = 0;
 		if ((flags & MINRX_REG_MINDISABLE) != 0 && (flags & MINRX_REG_MINIMAL) != 0)
 			return new Regexp { enc, MINRX_REG_BADPAT, {}, nullptr, 0, {}, false, {}, -1, 0, 0, 1 };
-		auto [lhs, nstk, hasmin, err] = alt(false, 0);
-		if (!err && (!emplace_final(&np, &lhs, Node::Exit, 0, 0, 0) || !(nodes = (Node *) malloc(lhs.size * sizeof (Node)))))
-			err = MINRX_REG_ESPACE;
-		if (err) {
-			csets.clear();
-			lhs = empty();
+		Subexp lh = alt(false, 0);
+		if (lh.err == MINRX_REG_SUCCESS && (!emplace_final(&np, &lh.nodes, Node::Exit, 0, 0, 0) || !(nodes = (Node *) malloc(lh.nodes.size * sizeof (Node)))))
+			lh.err = MINRX_REG_ESPACE;
+		if (lh.err != MINRX_REG_SUCCESS) {
+			csets_clear(&csets);
+			lh.nodes = empty();
 			nmin = 0;
-			nstk = 0;
+			lh.maxstk = 0;
 			nsub = 0;
 		}
 		if (nmin > 0)
-			for (auto l = lhs.first; l; l = l->next)
+			for (auto l = lh.nodes.first; l; l = l->next)
 				l->node.nstk += nmin;
-		for (auto l = lhs.first; l; l = l->next)
+		for (auto l = lh.nodes.first; l; l = l->next)
 			nodes[nnode++] = l->node;
 		for (auto p = np, q = p; p; p = q) {
 			q = p->prev;
 			free((void *) p);
 		}
 		np = nullptr;
-		auto fc = firstclosure(nodes, nnode);	// FIXME: check for allocation errors
+		CSet *fc = firstclosure(nodes, nnode);		// FIXME: check for allocation errors
 		FirstBytes fb;
 		int32_t fu = -1;
 		bool fv = firstbytes(&fb, &fu, enc, fc);
-		return new Regexp{ enc, err, std::move(csets), nodes, nnode, std::move(fc), fv, fb, fu, nmin, nstk, nsub + 1 };
+		return new Regexp{ enc, lh.err, csets, nodes, nnode, fc, fv, fb, fu, nmin, lh.maxstk, nsub + 1 };
 	}
 };
 
-static const size_t SizeBits = std::numeric_limits<size_t>::digits;
+static const size_t SizeBits = CHAR_BIT * sizeof (size_t); // FIXME: find the technically correct way to do this
 
 struct Execute {
 	const Regexp *r;
@@ -1677,7 +1786,7 @@ execute_add(Execute *e, QVec &ncsv, NInt k, NInt nstk, const NState *nsp, WChar 
 {
 	const Node &n = e->nodes[k];
 	if (n.type <= Node::CSet) {
-		if (n.type == (NInt) wcnext || (n.type == Node::CSet && e->r->csets[n.args[0]].test(wcnext))) {
+		if (n.type == (NInt) wcnext || (n.type == Node::CSet && cset_test(csets_aref(&e->r->csets, n.args[0]), wcnext))) {
 			auto [newly, newnsp] = qvec_insert(&ncsv, k, nsp);
 			if (newly)
 				new (newnsp) NState(*nsp), nstate_construct_copy(newnsp, nsp);
@@ -1887,7 +1996,7 @@ execute(Execute *e, size_t nm, minrx_regmatch_t *rm)
 			e->wcprev = wcnext, e->off = wconv_off(&e->wconv), wcnext = wconv_nextchr(&e->wconv);
 	NState nsinit;
 	nstate_construct(&nsinit, &e->allocator);
-	if ((e->flags & MINRX_REG_NOFIRSTBYTES) == 0 && e->r->firstvalid && !e->r->firstcset->test(wcnext)) {
+	if ((e->flags & MINRX_REG_NOFIRSTBYTES) == 0 && e->r->firstvalid && !cset_test(&*e->r->firstcset, wcnext)) {
 	zoom:
 		auto cp = e->wconv.cp, ep = e->wconv.ep;
 		if (e->r->firstunique != -1) {
