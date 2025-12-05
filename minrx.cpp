@@ -52,11 +52,11 @@
 #endif /* ! HAVE_GETTEXT_H */
 #define N_(msgid) msgid
 
+#include "minrx.h"
+
 // Arnold Robbins' charset library
 #include <memory>
 #include "charset.h"
-
-#include "minrx.h"
 
 #ifdef __GNUC__
 #define inline __attribute__((__always_inline__)) inline
@@ -2173,3 +2173,5 @@ minrx_regerror(int errcode, const minrx_regex_t *, char *errbuf, size_t errsize)
 		errbuf[errsize - 1] = '\0';
 	return size + 1;
 }
+
+#include "charset.c"

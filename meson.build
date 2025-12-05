@@ -4,7 +4,6 @@ project('minrx', ['c', 'cpp'],
 
 libminrx_inc = include_directories('.')
 libminrx_lib = library('minrx',
-		       'charset.c',
 		       'minrx.cpp',
 		       install : true,
 		       soversion : '0')

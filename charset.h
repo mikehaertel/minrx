@@ -32,7 +32,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#ifdef MINRX_H
+#ifdef _MINRX_H
 #define Static static
 #else
 #define Static	/* nothing */
