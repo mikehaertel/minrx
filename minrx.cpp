@@ -880,7 +880,7 @@ cset_parse(CSet *cs, minrx_regcomp_flags_t flags, WConv_Encoding enc, WConv &wco
 	return MINRX_REG_SUCCESS;
 }
 
-bool
+static bool
 cset_firstbytes(const CSet *cs, FirstBytes *fb, int32_t *fu, WConv_Encoding e)
 {
 	for (int i = 0; i < 256; i++)
