@@ -52,11 +52,11 @@
 #endif /* ! HAVE_GETTEXT_H */
 #define N_(msgid) msgid
 
+#include "minrx.h"
+
 // Arnold Robbins' charset library
 #include <memory>
-#include "charset.h"
-
-#include "minrx.h"
+#include "charset.c"
 
 #ifdef __GNUC__
 #define inline __attribute__((__always_inline__)) inline
@@ -880,7 +880,7 @@ cset_parse(CSet *cs, minrx_regcomp_flags_t flags, WConv_Encoding enc, WConv &wco
 	return MINRX_REG_SUCCESS;
 }
 
-bool
+static bool
 cset_firstbytes(const CSet *cs, FirstBytes *fb, int32_t *fu, WConv_Encoding e)
 {
 	for (int i = 0; i < 256; i++)
