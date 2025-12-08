@@ -479,13 +479,14 @@ struct QVec {
 	NState *storage;
 };
 
-static void
+static bool
 qvec_construct(QVec *q, size_t l)
 {
 	if (!qset_construct(&q->qset, l))
-		throw std::bad_alloc();
+		return false;
 	q->storage = nullptr;
-	q->storage = static_cast<NState *>(::operator new(l * sizeof (NState)));
+	q->storage = (NState *) malloc(l * sizeof (NState));
+	return true;
 }
 
 static void
@@ -501,7 +502,7 @@ static void
 qvec_destruct(QVec *q)
 {
 	qvec_clear(q);
-	::operator delete(q->storage);
+	free((void *) q->storage);
 	qset_destruct(&q->qset);
 }
 
@@ -1021,14 +1022,6 @@ struct Regexp {
 	size_t nmin;
 	size_t nstk;
 	size_t nsub;
-	~Regexp() {
-		free((void *) nodes);
-		csets_clear(&csets);
-		if (firstcset) {
-			cset_destruct(firstcset);
-			free((void *) firstcset);
-		}
-	}
 };
 
 //
@@ -1734,8 +1727,24 @@ compile(Compile *c)
 {
 	Node *nodes = nullptr;
 	NInt nnode = 0;
-	if ((c->flags & MINRX_REG_MINDISABLE) != 0 && (c->flags & MINRX_REG_MINIMAL) != 0)
-		return new Regexp { c->enc, MINRX_REG_BADPAT, {}, nullptr, 0, {}, false, {}, -1, 0, 0, 1 };
+	if ((c->flags & MINRX_REG_MINDISABLE) != 0 && (c->flags & MINRX_REG_MINIMAL) != 0) {
+		Regexp *r = (Regexp *) malloc(sizeof (Regexp));
+		if (r) {
+			r->enc = c->enc;
+			r->err = MINRX_REG_BADPAT;
+			csets_construct(&r->csets);
+			r->nodes = NULL;
+			r->nnode = 0;
+			r->firstcset = NULL;
+			r->firstvalid = false;
+			memset(&r->firstbytes, 0, sizeof r->firstbytes);
+			r->firstunique = -1;
+			r->nmin = 0;
+			r->nstk = 0;
+			r->nsub = 0;
+		}
+		return r;
+	}
 	Subexp lh = alt(c, false, 0);
 	if (lh.err == MINRX_REG_SUCCESS && (!emplace_final(&c->np, &lh.nodes, Exit, 0, 0, 0) || !(nodes = (Node *) malloc(lh.nodes.size * sizeof (Node)))))
 		lh.err = MINRX_REG_ESPACE;
@@ -1760,7 +1769,22 @@ compile(Compile *c)
 	FirstBytes fb;
 	int32_t fu = -1;
 	bool fv = firstbytes(&fb, &fu, c->enc, fc);
-	return new Regexp{ c->enc, lh.err, c->csets, nodes, nnode, fc, fv, fb, fu, c->nmin, lh.maxstk, c->nsub + 1 };
+	Regexp *r = (Regexp *) malloc(sizeof (Regexp));
+	if (r) {
+		r->enc = c->enc;
+		r->err = lh.err;
+		r->csets = c->csets;
+		r->nodes = nodes;
+		r->nnode = nnode;
+		r->firstcset = fc;
+		r->firstvalid = fv;
+		r->firstbytes = fb;
+		r->firstunique = fu;
+		r->nmin = c->nmin;
+		r->nstk = lh.maxstk;
+		r->nsub = c->nsub + 1;
+	}
+	return r;
 }
 
 static const size_t SizeBits = CHAR_BIT * sizeof (size_t); // FIXME: find the technically correct way to do this
@@ -1784,7 +1808,7 @@ struct Execute {
 	QVec epsv;
 };
 
-static void
+static bool
 execute_construct(Execute *e, const Regexp *r, minrx_regexec_flags_t flags, const char *bp, const char *ep)
 {
 	e->r = r;
@@ -1802,8 +1826,9 @@ execute_construct(Execute *e, const Regexp *r, minrx_regexec_flags_t flags, cons
 	cowvec_construct(&e->best, nullptr);
 	e->bestmincount = 0;
 	if (!qset_construct(&e->epsq, r->nnode))
-		throw std::bad_alloc();
+		return false;
 	qvec_construct(&e->epsv, r->nnode);
+	return true;
 }
 
 static void
@@ -1824,7 +1849,7 @@ execute_add(Execute *e, QVec *ncsv, NInt k, NInt nstk, const NState *nsp, WChar 
 		if (n.type == (NInt) wcnext || (n.type == Cset && cset_test(csets_aref(&e->r->csets, n.args[0]), wcnext))) {
 			auto [newly, newnsp] = qvec_insert(ncsv, k, nsp);
 			if (newly)
-				new (newnsp) NState(*nsp), nstate_construct_copy(newnsp, nsp);
+				nstate_construct_copy(newnsp, nsp);
 			else if (int x = nstate_cmp(nsp, newnsp, e->gen, nstk, xargs...); x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &newnsp->substack, e->minvcnt) > 0))
 				nstate_copy(newnsp, nsp);
 			else
@@ -1838,7 +1863,7 @@ execute_add(Execute *e, QVec *ncsv, NInt k, NInt nstk, const NState *nsp, WChar 
 	} else {
 		auto [newly, newnsp] = qvec_insert(&e->epsv, k, nsp);
 		if (newly)
-			new (newnsp) NState(*nsp), nstate_construct_copy(newnsp, nsp);
+			nstate_construct_copy(newnsp, nsp);
 		else if (int x = nstate_cmp(nsp, newnsp, e->gen, nstk, xargs...); x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &newnsp->substack, e->minvcnt) > 0))
 			nstate_copy(newnsp, nsp);
 		else
@@ -2178,7 +2203,7 @@ minrx_regncomp(minrx_regex_t *rx, size_t ns, const char *s, int flags)
 int
 minrx_regnexec(minrx_regex_t *rx, size_t ns, const char *s, size_t nm, minrx_regmatch_t *rm, int flags)
 {
-	Regexp *r = reinterpret_cast<Regexp *>(rx->re_regexp);
+	Regexp *r = (Regexp *) rx->re_regexp;
 	Execute e;
 	execute_construct(&e, r, (minrx_regexec_flags_t) flags, s, s + ns);
 	int ret = execute(&e, nm, rm);
@@ -2189,7 +2214,16 @@ minrx_regnexec(minrx_regex_t *rx, size_t ns, const char *s, size_t nm, minrx_reg
 void
 minrx_regfree(minrx_regex_t *rx)
 {
-	delete reinterpret_cast<Regexp *>(rx->re_regexp);
+	Regexp *r = (Regexp *) rx->re_regexp;
+	if (r) {
+		if (r->firstcset) {
+			cset_destruct(r->firstcset);
+			free((void *) r->firstcset);
+		}
+		free((void *) r->nodes);
+		csets_clear(&r->csets);
+		free(r);
+	}
 	rx->re_regexp = nullptr;
 }
 
