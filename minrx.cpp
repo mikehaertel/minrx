@@ -714,7 +714,7 @@ cset_invert(CSet *cs)
 }
 
 static CSet *
-cset_set(CSet *cs, WChar wclo, WChar wchi)
+cset_set_range(CSet *cs, WChar wclo, WChar wchi)
 {
 	charset_add_range(cs->charset, wclo, wchi);	// FIXME: check for errors
 	return cs;
@@ -859,7 +859,7 @@ cset_parse(CSet *cs, minrx_regcomp_flags_t flags, WConv_Encoding enc, WConv *wco
 		if (wclo > wchi || (wclo != wchi && (wclo < 0 || wchi < 0)))
 			return MINRX_REG_ERANGE;
 		if (wclo >= 0) {
-			cset_set(cs, wclo, wchi);
+			cset_set_range(cs, wclo, wchi);
 			if ((flags & MINRX_REG_ICASE) != 0) {
 				for (WChar wc = wclo; wc <= wchi; ++wc) {
 					cset_set(cs, enc == Byte ? tolower(wc) : towlower(wc));
@@ -1317,7 +1317,7 @@ mkrep(Compile *c, Subexp lh, bool optional, bool infinite, NInt nstk)
 }
 
 static Subexp
-mkrep(Compile *c, Subexp lh, NInt m, NInt n, NInt nstk)
+mkrep_braces(Compile *c, Subexp lh, NInt m, NInt n, NInt nstk)
 {
 	if (lh.err != MINRX_REG_SUCCESS)
 		return lh;
@@ -1415,7 +1415,7 @@ rep(Compile *c, bool nested, NInt nstk)
 						minimal ^= true, c->wc = wconv_nextchr(&c->wconv);
 					if (hasmin)
 						minraise(c, &lh);
-					lh = mkrep(c, minimal ? minimize(c, lh, nstk) : lh, m, m, nstk);
+					lh = mkrep_braces(c, minimal ? minimize(c, lh, nstk) : lh, m, m, nstk);
 					goto comout;
 				}
 				if (c->wc == End)
@@ -1428,7 +1428,7 @@ rep(Compile *c, bool nested, NInt nstk)
 						minimal ^= true, c->wc = wconv_nextchr(&c->wconv);
 					if (hasmin)
 						minraise(c, &lh);
-					lh = mkrep(c, minimal ? minimize(c, lh, nstk) : lh, m, -1, nstk);
+					lh = mkrep_braces(c, minimal ? minimize(c, lh, nstk) : lh, m, -1, nstk);
 					goto comout;
 				}
 				if (!num(c, &n, &c->wc))
@@ -1441,7 +1441,7 @@ rep(Compile *c, bool nested, NInt nstk)
 					minimal ^= true, c->wc = wconv_nextchr(&c->wconv);
 				if (hasmin)
 					minraise(c, &lh);
-				lh = mkrep(c, minimal ? minimize(c, lh, nstk) : lh, m, n, nstk);
+				lh = mkrep_braces(c, minimal ? minimize(c, lh, nstk) : lh, m, n, nstk);
 				goto comout;
 			}
 			// fall through
