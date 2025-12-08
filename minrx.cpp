@@ -68,6 +68,12 @@ bool IsDigit(int32_t wc)
 	return wc >= L'0' && wc <= L'9';
 }
 
+static int
+cmp(size_t x, size_t y)
+{
+	return (x > y) - (x < y);
+}
+
 #ifdef __GNUC__
 // FIXME: expand compiler support beyond clang and gcc
 #if UINT_MAX == 18446744073709551615U
@@ -82,7 +88,7 @@ bool IsDigit(int32_t wc)
 #else
 // ctz --- count trailing zeros. dead simple table driven version
 
-int
+static int
 ctz(uint64_t val)
 {
 	static char table[] = {
@@ -270,7 +276,7 @@ cowvec_move(COWVec *dst, COWVec *src)
 }
 
 template <typename... XArgs>
-static auto
+static int
 cowvec_cmp(const COWVec *xcv, const COWVec *ycv, size_t limit, XArgs... xargs)
 {
 	size_t i;
@@ -278,23 +284,23 @@ cowvec_cmp(const COWVec *xcv, const COWVec *ycv, size_t limit, XArgs... xargs)
 	const size_t *yv = cowvec_storage_getref(ycv->storage, 0);
 	for (i = 0; i < limit - sizeof... (XArgs); i++)
 		if (xv[i] != yv[i])
-			return xv[i] <=> yv[i];
+			return cmp(xv[i], yv[i]);
 	if constexpr (sizeof...(XArgs) > 0)
 		for (size_t x : { xargs... })
 			if (x != yv[i++])
-				return x <=> yv[i - 1];
-	return (size_t) 0 <=> (size_t) 0;
+				return cmp(x, yv[i - 1]);
+	return 0;
 }
 
-static auto
+static int
 cowvec_cmp_from(size_t o, const COWVec *xcv, const COWVec *ycv, size_t n)
 {
 	const size_t *xv = cowvec_storage_getref(xcv->storage, 0);
 	const size_t *yv = cowvec_storage_getref(ycv->storage, 0);
 	for (size_t i = 0; i < n; i++)
 		if (xv[o + i] != yv[o + i])
-			return xv[o + i] <=> yv[o + i];
-	return (size_t) 0 <=> (size_t) 0;
+			return cmp(xv[o + i], yv[o + i]);
+	return 0;
 }
 
 static bool
@@ -456,16 +462,16 @@ nstate_construct_move(NState *dstns, NState *srcns)
 }
 
 template <typename... XArgs>
-static auto
+static int
 nstate_cmp(const NState *xns, const NState *yns, size_t gen, size_t nstk, XArgs... xargs)
 {
 	if (gen != yns->gen)
-		return gen <=> yns->gen;
+		return cmp(gen, yns->gen);
 	if (xns->boff != yns->boff)
-		return yns->boff <=> xns->boff;
-	if (auto x = cowvec_cmp(&xns->substack, &yns->substack, nstk, xargs...); x != 0)
+		return cmp(yns->boff, xns->boff);
+	if (int x = cowvec_cmp(&xns->substack, &yns->substack, nstk, xargs...); x != 0)
 		return x;
-	return 0 <=> 0;
+	return 0;
 }
 
 struct QVec {
@@ -1819,7 +1825,7 @@ execute_add(Execute *e, QVec *ncsv, NInt k, NInt nstk, const NState *nsp, WChar 
 			auto [newly, newnsp] = qvec_insert(ncsv, k, nsp);
 			if (newly)
 				new (newnsp) NState(*nsp), nstate_construct_copy(newnsp, nsp);
-			else if (auto x = nstate_cmp(nsp, newnsp, e->gen, nstk, xargs...); x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &newnsp->substack, e->minvcnt) > 0))
+			else if (int x = nstate_cmp(nsp, newnsp, e->gen, nstk, xargs...); x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &newnsp->substack, e->minvcnt) > 0))
 				nstate_copy(newnsp, nsp);
 			else
 				return;
@@ -1833,7 +1839,7 @@ execute_add(Execute *e, QVec *ncsv, NInt k, NInt nstk, const NState *nsp, WChar 
 		auto [newly, newnsp] = qvec_insert(&e->epsv, k, nsp);
 		if (newly)
 			new (newnsp) NState(*nsp), nstate_construct_copy(newnsp, nsp);
-		else if (auto x = nstate_cmp(nsp, newnsp, e->gen, nstk, xargs...); x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &newnsp->substack, e->minvcnt) > 0))
+		else if (int x = nstate_cmp(nsp, newnsp, e->gen, nstk, xargs...); x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &newnsp->substack, e->minvcnt) > 0))
 			nstate_copy(newnsp, nsp);
 		else
 			return;
