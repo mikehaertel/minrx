@@ -127,8 +127,6 @@ ctz(uint64_t val)
 #define MAX(A, B) ((A) >= (B) ? (A) : (B))
 #define MIN(A, B) ((A) <= (B) ? (A) : (B))
 
-namespace MinRX {
-
 typedef struct COWVec_Allocator COWVec_Allocator;
 typedef struct COWVec_Storage COWVec_Storage;
 typedef struct COWVec COWVec;
@@ -904,35 +902,36 @@ cset_firstbytes(const CSet *cs, FirstBytes *fb, int32_t *fu, WConv_Encoding e)
 typedef size_t NInt;
 
 struct Node {
-	enum Type {
-		// character-matching node types
-		/* char <= uchar max */	// no args
-		CSet = WCharMax + 1,	// args = index in Regexp::csets vector
-		// epsilon-matching node types
-		Exit,			// no args
-		Fork,			// args = offset to first goto
-		Goto,			// args = offset to next goto, offset to just after join
-		Join,			// args = none (but supplies incoming stack depth for next node)
-		Loop,			// args = offset to next, optional flag
-		MinB,			// args = this minified subexpression nesting depth
-		MinL,			// args = this minified subexpression nesting depth
-		MinR,			// args = this minified subexpression nesting depth
-		Next,			// args = offset to loop, infinite flag
-		Skip,			// args = offset over skipped nodes
-		SubL,			// args = minimum and maximum contained subexpression numbers
-		SubR,			// args = minimum and maximum contained subexpression numbers
-		ZBOB,			// no args - match empty string at beginning of buffer
-		ZEOB,			// no args - match empty string at end of buffer
-		ZBOL,			// no args - match empty string at beginning of buffer or following \n
-		ZEOL,			// no args - match empty string at end of buffer or preceding \n
-		ZBOW,			// no args - match empty string at beginning of word
-		ZEOW,			// no args - match empty string at end of word
-		ZXOW,			// no args - match empty string at either end of word
-		ZNWB			// no args - match empty string at non-word-boundary
-	};
 	NInt type;
 	NInt args[2];
 	NInt nstk;
+};
+
+enum NodeType {
+	// character-matching node types
+	/* char <= uchar max */	// no args
+	Cset = WCharMax + 1,	// args = index in Regexp csets vector
+	// epsilon-matching node types
+	Exit,			// no args
+	Fork,			// args = offset to first goto
+	Goto,			// args = offset to next goto, offset to just after join
+	Join,			// args = none (but supplies incoming stack depth for next node)
+	Loop,			// args = offset to next, optional flag
+	MinB,			// args = this minified subexpression nesting depth
+	MinL,			// args = this minified subexpression nesting depth
+	MinR,			// args = this minified subexpression nesting depth
+	Next,			// args = offset to loop, infinite flag
+	Skip,			// args = offset over skipped nodes
+	SubL,			// args = minimum and maximum contained subexpression numbers
+	SubR,			// args = minimum and maximum contained subexpression numbers
+	ZBOB,			// no args - match empty string at beginning of buffer
+	ZEOB,			// no args - match empty string at end of buffer
+	ZBOL,			// no args - match empty string at beginning of buffer or following \n
+	ZEOL,			// no args - match empty string at end of buffer or preceding \n
+	ZBOW,			// no args - match empty string at beginning of word
+	ZEOW,			// no args - match empty string at end of word
+	ZXOW,			// no args - match empty string at either end of word
+	ZNWB			// no args - match empty string at non-word-boundary
 };
 
 typedef struct CSets CSets;
@@ -1219,7 +1218,7 @@ alt(Compile *c, bool nested, NInt nstk)
 		Subexp rh = alts[count - 1];
 		if (rh.err != MINRX_REG_SUCCESS)
 			return rh;
-		if (!emplace_first(&c->np, &rh.nodes, Node::Goto, rh.nodes.size, rh.nodes.size + 1, nstk + 1))
+		if (!emplace_first(&c->np, &rh.nodes, Goto, rh.nodes.size, rh.nodes.size + 1, nstk + 1))
 			return {empty(), 0, false, MINRX_REG_ESPACE};
 		--count;
 		while (count > 0) {
@@ -1229,17 +1228,17 @@ alt(Compile *c, bool nested, NInt nstk)
 			rh.maxstk = MAX(mh.maxstk, rh.maxstk);
 			rh.hasmin |= mh.hasmin;
 			rh.nodes = mh.nodes;
-			if (!emplace_first(&c->np, &rh.nodes, Node::Goto, mhsize, rh.nodes.size + 1, nstk + 1))
+			if (!emplace_first(&c->np, &rh.nodes, Goto, mhsize, rh.nodes.size + 1, nstk + 1))
 				return {empty(), 0, false, MINRX_REG_ESPACE};
 		}
 		if (alts != altspace)
 			free((void *) alts);
-		if (!emplace_first(&c->np, &lh.nodes, Node::Fork, lh.nodes.size, 0, nstk + 1))
+		if (!emplace_first(&c->np, &lh.nodes, Fork, lh.nodes.size, 0, nstk + 1))
 			return {empty(), 0, false, MINRX_REG_ESPACE};
 		concatmove(&lh.nodes, &rh.nodes);
 		lh.maxstk = MAX(lh.maxstk, rh.maxstk);
 		lh.hasmin |= rh.hasmin;
-		if (!emplace_final(&c->np, &lh.nodes, Node::Join, lh.nodes.size - 1, 0, nstk + 1))
+		if (!emplace_final(&c->np, &lh.nodes, Join, lh.nodes.size - 1, 0, nstk + 1))
 			return {empty(), 0, false, MINRX_REG_ESPACE};
 	}
 	return {lh.nodes, lh.maxstk, lh.hasmin, MINRX_REG_SUCCESS};
@@ -1270,7 +1269,7 @@ minimize(Compile *c, Subexp lh, NInt nstk)
 		return lh;
 	for (ListNode *n = lh.nodes.first; n != nullptr; n = n->next)
 		n->node.nstk += 1;
-	if (!emplace_first(&c->np, &lh.nodes, Node::MinL, 0, 0, nstk + 1) || !emplace_final(&c->np, &lh.nodes, Node::MinR, 0, 0, nstk))
+	if (!emplace_first(&c->np, &lh.nodes, MinL, 0, 0, nstk + 1) || !emplace_final(&c->np, &lh.nodes, MinR, 0, 0, nstk))
 		return {empty(), 0, false, MINRX_REG_ESPACE};
 	c->nmin = MAX(c->nmin, (size_t) 1);
 	return {lh.nodes, lh.maxstk + 1, true, lh.err};
@@ -1284,9 +1283,9 @@ minraise(Compile *c, Subexp *lhp)
 	NInt maxlevel = 0;
 	for (ListNode *n = lhp->nodes.first; n != nullptr; n = n->next)
 		switch (n->node.type) {
-		case Node::MinB:
-		case Node::MinL:
-		case Node::MinR:
+		case MinB:
+		case MinL:
+		case MinR:
 			maxlevel = MAX(maxlevel, ++n->node.args[0]);
 			break;
 		default:
@@ -1304,14 +1303,14 @@ mkrep(Compile *c, Subexp lh, bool optional, bool infinite, NInt nstk)
 		for (ListNode *l = lh.nodes.first; l != nullptr; l = l->next)
 			l->node.nstk += 2;
 		NInt lhsize = lh.nodes.size;
-		if (!emplace_first(&c->np, &lh.nodes, Node::Skip, lhsize, 0, nstk + 2))
+		if (!emplace_first(&c->np, &lh.nodes, Skip, lhsize, 0, nstk + 2))
 			return {empty(), 0, false, MINRX_REG_ESPACE};
 		return {lh.nodes, lh.maxstk + 2, lh.hasmin, MINRX_REG_SUCCESS};
 	} else {
 		for (ListNode *l = lh.nodes.first; l != nullptr; l = l->next)
 			l->node.nstk += 3;
 		NInt lhsize = lh.nodes.size;
-		if (!emplace_first(&c->np, &lh.nodes, Node::Loop, lhsize, (NInt) optional, nstk + 3) || !emplace_final(&c->np, &lh.nodes, Node::Next, lhsize, (NInt) infinite, nstk))
+		if (!emplace_first(&c->np, &lh.nodes, Loop, lhsize, (NInt) optional, nstk + 3) || !emplace_final(&c->np, &lh.nodes, Next, lhsize, (NInt) infinite, nstk))
 			return {empty(), 0, false, MINRX_REG_ESPACE};
 		return {lh.nodes, lh.maxstk + 3, lh.hasmin, MINRX_REG_SUCCESS};
 	}
@@ -1348,7 +1347,7 @@ mkrep(Compile *c, Subexp lh, NInt m, NInt n, NInt nstk)
 		for (ListNode *r = rh.nodes.first; r != nullptr; r = r->next)
 			r->node.nstk += 2;
 		NInt rhsize = rh.nodes.size;
-		if (!emplace_first(&c->np, &rh.nodes, Node::Skip, rhsize, 1, nstk + 2))
+		if (!emplace_first(&c->np, &rh.nodes, Skip, rhsize, 1, nstk + 2))
 			return {empty(), 0, false, MINRX_REG_ESPACE};
 		for (; k < n; ++k)
 			if (!concatcopy(&c->np, &lh.nodes, &rh.nodes))
@@ -1360,7 +1359,7 @@ mkrep(Compile *c, Subexp lh, NInt m, NInt n, NInt nstk)
 		for (ListNode *r = rh.nodes.first; r != nullptr; r = r->next)
 			r->node.nstk += 3;
 		NInt rhsize = rh.nodes.size;
-		if (!emplace_first(&c->np, &rh.nodes, Node::Loop, rhsize, 1, nstk + 3) || !emplace_final(&c->np, &rh.nodes, Node::Next, rhsize, 1, nstk))
+		if (!emplace_first(&c->np, &rh.nodes, Loop, rhsize, 1, nstk + 3) || !emplace_final(&c->np, &rh.nodes, Next, rhsize, 1, nstk))
 			return {empty(), 0, false, MINRX_REG_ESPACE};
 		concatmove(&lh.nodes, &rh.nodes);
 	}
@@ -1395,7 +1394,7 @@ rep(Compile *c, bool nested, NInt nstk)
 				minraise(c, &lh);
 			lh = mkrep(c, minimal ? minimize(c, lh, nstk) : lh, optional, infinite, nstk);
 		comout:	if (minimal) {
-				if (!emplace_first(&c->np, &lh.nodes, Node::MinB, 0, 0, nstk))
+				if (!emplace_first(&c->np, &lh.nodes, MinB, 0, 0, nstk))
 					return {empty(), 0, false, MINRX_REG_ESPACE};
 				hasmin = true;
 			}
@@ -1468,7 +1467,7 @@ chr(Compile *c, bool nested, NInt nstk)
 		} else {
 			csets_emplace_back(&c->csets, c->enc);	// FIXME: check for error
 			cset_set(csets_back(&c->csets), c->wc, true);
-			if (!emplace_final(&c->np, &lhs, Node::CSet, csets_size(&c->csets) - 1, 0, nstk))
+			if (!emplace_final(&c->np, &lhs, Cset, csets_size(&c->csets) - 1, 0, nstk))
 				return {empty(), 0, false, MINRX_REG_ESPACE};
 		}
 		c->wc = wconv_nextchr(&c->wconv);
@@ -1484,7 +1483,7 @@ chr(Compile *c, bool nested, NInt nstk)
 		return {empty(), 0, false, MINRX_REG_BADRPT};
 	case L'[':
 		lhmaxstk = nstk;
-		if (!emplace_final(&c->np, &lhs, Node::CSet, csets_size(&c->csets), 0, nstk))
+		if (!emplace_final(&c->np, &lhs, Cset, csets_size(&c->csets), 0, nstk))
 			return {empty(), 0, false, MINRX_REG_ESPACE};
 		csets_emplace_back(&c->csets, c->enc);		// FIXME: check for error
 		if (minrx_result_t err = cset_parse(csets_back(&c->csets), c->flags, c->enc, &c->wconv))
@@ -1500,19 +1499,19 @@ chr(Compile *c, bool nested, NInt nstk)
 			cset_invert(csets_back(&c->csets));
 		}
 		lhmaxstk = nstk;
-		if (!emplace_final(&c->np, &lhs, Node::CSet, c->dot, 0, nstk))
+		if (!emplace_final(&c->np, &lhs, Cset, c->dot, 0, nstk))
 			return {empty(), 0, false, MINRX_REG_ESPACE};
 		c->wc = wconv_nextchr(&c->wconv);
 		break;
 	case L'^':
 		lhmaxstk = nstk;
-		if (!emplace_final(&c->np, &lhs, (c->flags & MINRX_REG_NEWLINE) == 0 ? Node::ZBOB : Node::ZBOL, 0, 0, nstk))
+		if (!emplace_final(&c->np, &lhs, (c->flags & MINRX_REG_NEWLINE) == 0 ? ZBOB : ZBOL, 0, 0, nstk))
 			return {empty(), 0, false, MINRX_REG_ESPACE};
 		c->wc = wconv_nextchr(&c->wconv);
 		break;
 	case L'$':
 		lhmaxstk = nstk;
-		if (!emplace_final(&c->np, &lhs, (c->flags & MINRX_REG_NEWLINE) == 0 ? Node::ZEOB : Node::ZEOL, 0, 0, nstk))
+		if (!emplace_final(&c->np, &lhs, (c->flags & MINRX_REG_NEWLINE) == 0 ? ZEOB : ZEOL, 0, 0, nstk))
 			return {empty(), 0, false, MINRX_REG_ESPACE};
 		c->wc = wconv_nextchr(&c->wconv);
 		break;
@@ -1523,37 +1522,37 @@ chr(Compile *c, bool nested, NInt nstk)
 		case L'<':
 			if ((c->flags & MINRX_REG_EXTENSIONS_BSD) == 0)
 				goto normal;
-			if (!emplace_final(&c->np, &lhs, Node::ZBOW, 0, 0, nstk))
+			if (!emplace_final(&c->np, &lhs, ZBOW, 0, 0, nstk))
 				return {empty(), 0, false, MINRX_REG_ESPACE};
 			break;
 		case L'>':
 			if ((c->flags & MINRX_REG_EXTENSIONS_BSD) == 0)
 				goto normal;
-			if (!emplace_final(&c->np, &lhs, Node::ZEOW, 0, 0, nstk))
+			if (!emplace_final(&c->np, &lhs, ZEOW, 0, 0, nstk))
 				return {empty(), 0, false, MINRX_REG_ESPACE};
 			break;
 		case L'`':
 			if ((c->flags & MINRX_REG_EXTENSIONS_GNU) == 0)
 				goto normal;
-			if (!emplace_final(&c->np, &lhs, Node::ZBOB, 0, 0, nstk))
+			if (!emplace_final(&c->np, &lhs, ZBOB, 0, 0, nstk))
 				return {empty(), 0, false, MINRX_REG_ESPACE};
 			break;
 		case L'\'':
 			if ((c->flags & MINRX_REG_EXTENSIONS_GNU) == 0)
 				goto normal;
-			if (!emplace_final(&c->np, &lhs, Node::ZEOB, 0, 0, nstk))
+			if (!emplace_final(&c->np, &lhs, ZEOB, 0, 0, nstk))
 				return {empty(), 0, false, MINRX_REG_ESPACE};
 			break;
 		case L'b':
 			if ((c->flags & MINRX_REG_EXTENSIONS_GNU) == 0)
 				goto normal;
-			if (!emplace_final(&c->np, &lhs, Node::ZXOW, 0, 0, nstk))
+			if (!emplace_final(&c->np, &lhs, ZXOW, 0, 0, nstk))
 				return {empty(), 0, false, MINRX_REG_ESPACE};
 			break;
 		case L'B':
 			if ((c->flags & MINRX_REG_EXTENSIONS_GNU) == 0)
 				goto normal;
-			if (!emplace_final(&c->np, &lhs, Node::ZNWB, 0, 0, nstk))
+			if (!emplace_final(&c->np, &lhs, ZNWB, 0, 0, nstk))
 				return {empty(), 0, false, MINRX_REG_ESPACE};
 			break;
 		case L's':
@@ -1566,7 +1565,7 @@ chr(Compile *c, bool nested, NInt nstk)
 				csets_emplace_back(&c->csets, c->enc);		// FIXME: check for error
 				cset_parse(csets_back(&c->csets), c->flags, c->enc, &wconv);
 			}
-			if (!emplace_final(&c->np, &lhs, Node::CSet, c->esc_s, 0, nstk))
+			if (!emplace_final(&c->np, &lhs, Cset, c->esc_s, 0, nstk))
 				return {empty(), 0, false, MINRX_REG_ESPACE};
 			break;
 		case L'S':
@@ -1579,7 +1578,7 @@ chr(Compile *c, bool nested, NInt nstk)
 				csets_emplace_back(&c->csets, c->enc);		// FIXME: check for error
 				cset_parse(csets_back(&c->csets), c->flags, c->enc, &wconv);
 			}
-			if (!emplace_final(&c->np, &lhs, Node::CSet, c->esc_S, 0, nstk))
+			if (!emplace_final(&c->np, &lhs, Cset, c->esc_S, 0, nstk))
 				return {empty(), 0, false, MINRX_REG_ESPACE};
 			break;
 		case L'w':
@@ -1592,7 +1591,7 @@ chr(Compile *c, bool nested, NInt nstk)
 				csets_emplace_back(&c->csets, c->enc);		// FIXME: check for error
 				cset_parse(csets_back(&c->csets), c->flags, c->enc, &wconv);
 			}
-			if (!emplace_final(&c->np, &lhs, Node::CSet, c->esc_w, 0, nstk))
+			if (!emplace_final(&c->np, &lhs, Cset, c->esc_w, 0, nstk))
 				return {empty(), 0, false, MINRX_REG_ESPACE};
 			break;
 		case L'W':
@@ -1605,7 +1604,7 @@ chr(Compile *c, bool nested, NInt nstk)
 				csets_emplace_back(&c->csets, c->enc);		// FIXME: check for error
 				cset_parse(csets_back(&c->csets), c->flags, c->enc, &wconv);
 			}
-			if (!emplace_final(&c->np, &lhs, Node::CSet, c->esc_W, 0, nstk))
+			if (!emplace_final(&c->np, &lhs, Cset, c->esc_W, 0, nstk))
 				return {empty(), 0, false, MINRX_REG_ESPACE};
 			break;
 		case End:
@@ -1629,7 +1628,7 @@ chr(Compile *c, bool nested, NInt nstk)
 				return {lhs, lhmaxstk, lhasmin, err};
 			if (c->wc != L')')
 				return {{}, 0, false, MINRX_REG_EPAREN};
-			if (!emplace_first(&c->np, &lhs, Node::SubL, n, c->nsub, nstk + 1) || !emplace_final(&c->np, &lhs, Node::SubR, n, c->nsub, nstk))
+			if (!emplace_first(&c->np, &lhs, SubL, n, c->nsub, nstk + 1) || !emplace_final(&c->np, &lhs, SubR, n, c->nsub, nstk))
 				return {empty(), 0, false, MINRX_REG_ESPACE};
 			c->wc = wconv_nextchr(&c->wconv);
 		}
@@ -1668,30 +1667,30 @@ firstclosure(Compile *c, const Node *nodes, NInt nnode)
 	do {
 		NInt k = qset_remove(&epsq);
 		const Node &n = nodes[k];
-		if (n.type <= Node::CSet)
+		if (n.type <= Cset)
 			qset_insert(&firsts, k);
 		else
 			switch (n.type) {
-			case Node::Exit:
+			case Exit:
 				qset_destruct(&firsts);
 				qset_destruct(&epsv);
 				qset_destruct(&epsq);
 				return {};
-			case Node::Fork:
+			case Fork:
 				do {
 					add(k + 1);
 					k = k + 1 + nodes[k].args[0];
-				} while (nodes[k].type != Node::Join);
+				} while (nodes[k].type != Join);
 				break;
-			case Node::Goto:
+			case Goto:
 				add(k + 1 + n.args[0]);
 				break;
-			case Node::Loop:
+			case Loop:
 				add(k + 1);
 				if (n.args[1])
 					add(k + 1 + n.args[0]);
 				break;
-			case Node::Skip:
+			case Skip:
 				add(k + 1);
 				add(k + 1 + n.args[0]);
 				break;
@@ -1732,7 +1731,7 @@ compile(Compile *c)
 	if ((c->flags & MINRX_REG_MINDISABLE) != 0 && (c->flags & MINRX_REG_MINIMAL) != 0)
 		return new Regexp { c->enc, MINRX_REG_BADPAT, {}, nullptr, 0, {}, false, {}, -1, 0, 0, 1 };
 	Subexp lh = alt(c, false, 0);
-	if (lh.err == MINRX_REG_SUCCESS && (!emplace_final(&c->np, &lh.nodes, Node::Exit, 0, 0, 0) || !(nodes = (Node *) malloc(lh.nodes.size * sizeof (Node)))))
+	if (lh.err == MINRX_REG_SUCCESS && (!emplace_final(&c->np, &lh.nodes, Exit, 0, 0, 0) || !(nodes = (Node *) malloc(lh.nodes.size * sizeof (Node)))))
 		lh.err = MINRX_REG_ESPACE;
 	if (lh.err != MINRX_REG_SUCCESS) {
 		csets_clear(&c->csets);
@@ -1815,8 +1814,8 @@ inline static void
 execute_add(Execute *e, QVec *ncsv, NInt k, NInt nstk, const NState *nsp, WChar wcnext, XArgs... xargs)
 {
 	const Node &n = e->nodes[k];
-	if (n.type <= Node::CSet) {
-		if (n.type == (NInt) wcnext || (n.type == Node::CSet && cset_test(csets_aref(&e->r->csets, n.args[0]), wcnext))) {
+	if (n.type <= Cset) {
+		if (n.type == (NInt) wcnext || (n.type == Cset && cset_test(csets_aref(&e->r->csets, n.args[0]), wcnext))) {
 			auto [newly, newnsp] = qvec_insert(ncsv, k, nsp);
 			if (newly)
 				new (newnsp) NState(*nsp), nstate_construct_copy(newnsp, nsp);
@@ -1861,7 +1860,7 @@ execute_epsclosure(Execute *e, QVec *ncsv, WChar wcnext)
 		const Node &n = e->nodes[k];
 		NInt nstk = n.nstk;
 		switch (n.type) {
-		case Node::Exit:
+		case Exit:
 			{
 				size_t beg = nsp->boff, end = e->off, mincount = e->r->nmin ? cowvec_get(&nsp->substack, 0) : (size_t) -1;
 				bool minvalid = e->r->nmin ? cowvec_get(&nsp->substack, e->minvoff) < ((size_t) 1 << (SizeBits - 1)) : false;
@@ -1877,27 +1876,27 @@ execute_epsclosure(Execute *e, QVec *ncsv, WChar wcnext)
 				}
 			}
 			break;
-		case Node::Fork:
+		case Fork:
 			{
 				NInt priority = (NInt) -1;
 				do {
 					execute_add(e, ncsv, k + 1, nstk, nsp, wcnext, priority--);
 					k = k + 1 + nodes[k].args[0];
-				} while (nodes[k].type != Node::Join);
+				} while (nodes[k].type != Join);
 			}
 			break;
-		case Node::Goto:
+		case Goto:
 			execute_add(e, ncsv, k + 1 + n.args[1], nstk, nsp, wcnext);
 			break;
-		case Node::Join:
+		case Join:
 			execute_add(e, ncsv, k + 1, nstk, nsp, wcnext);
 			break;
-		case Node::Loop:
+		case Loop:
 			execute_add(e, ncsv, k + 1, nstk, nsp, wcnext, (NInt) e->off, (NInt) -1, (NInt) e->off);
 			if (n.args[1])
 				execute_add(e, ncsv, k + 1 + n.args[0], nstk, nsp, wcnext, (NInt) e->off, (NInt) 0, (NInt) e->off);
 			break;
-		case Node::MinB:
+		case MinB:
 			{
 				size_t w = n.args[0] / SizeBits;
 				size_t b = (size_t) 1 << (SizeBits - 1 - n.args[0] % SizeBits);
@@ -1914,10 +1913,10 @@ execute_epsclosure(Execute *e, QVec *ncsv, WChar wcnext)
 				nstate_destruct(&nscopy);
 			}
 			break;
-		case Node::MinL:
+		case MinL:
 			execute_add(e, ncsv, k + 1, nstk, nsp, wcnext, e->off);
 			break;
-		case Node::MinR:
+		case MinR:
 			{
 				NState nscopy;
 				nstate_construct_copy(&nscopy, nsp);
@@ -1935,16 +1934,16 @@ execute_epsclosure(Execute *e, QVec *ncsv, WChar wcnext)
 				nstate_destruct(&nscopy);
 			}
 			break;
-		case Node::Next:
+		case Next:
 			execute_add(e, ncsv, k + 1, nstk, nsp, wcnext);
 			if (n.args[1] && e->off > cowvec_get(&nsp->substack, nstk + 3 - 1))
 				execute_add(e, ncsv, k - n.args[0], nstk + 3, nsp, wcnext, cowvec_get(&nsp->substack, nstk), cowvec_get(&nsp->substack, nstk + 1) - 1, (NInt) e->off);
 			break;
-		case Node::Skip:
+		case Skip:
 			execute_add(e, ncsv, k + 1, nstk, nsp, wcnext, (NInt) e->off, (NInt) 1 ^ n.args[1]);
 			execute_add(e, ncsv, k + 1 + n.args[0], nstk, nsp, wcnext, (NInt) e->off, (NInt) 0 ^ n.args[1]);
 			break;
-		case Node::SubL:
+		case SubL:
 			{
 				NState nscopy;
 				nstate_construct_copy(&nscopy, nsp);
@@ -1958,7 +1957,7 @@ execute_epsclosure(Execute *e, QVec *ncsv, WChar wcnext)
 				nstate_destruct(&nscopy);
 			}
 			break;
-		case Node::SubR:
+		case SubR:
 			if (n.args[0] != (NInt) -1 && ((e->flags & MINRX_REG_FIRSTSUB) == 0 || cowvec_get(&nsp->substack, e->suboff + n.args[0] * 2) == (NInt) -1)) {
 				NState nscopy;
 				nstate_construct_copy(&nscopy, nsp);
@@ -1970,36 +1969,36 @@ execute_epsclosure(Execute *e, QVec *ncsv, WChar wcnext)
 				execute_add(e, ncsv, k + 1, nstk, nsp, wcnext);
 			}
 			break;
-		case Node::ZBOB:
+		case ZBOB:
 			if (e->off == 0 && (e->flags & MINRX_REG_NOTBOL) == 0)
 				execute_add(e, ncsv, k + 1, nstk, nsp, wcnext);
 			break;
-		case Node::ZEOB:
+		case ZEOB:
 			if (wcnext == End && (e->flags & MINRX_REG_NOTEOL) == 0)
 				execute_add(e, ncsv, k + 1, nstk, nsp, wcnext);
 			break;
-		case Node::ZBOL:
+		case ZBOL:
 			if (((e->off == 0 && (e->flags & MINRX_REG_NOTBOL) == 0)) || e->wcprev == L'\n')
 				execute_add(e, ncsv, k + 1, nstk, nsp, wcnext);
 			break;
-		case Node::ZEOL:
+		case ZEOL:
 			if (((wcnext == End && (e->flags & MINRX_REG_NOTEOL) == 0)) || wcnext == L'\n')
 				execute_add(e, ncsv, k + 1, nstk, nsp, wcnext);
 			break;
-		case Node::ZBOW:
+		case ZBOW:
 			if ((e->off == 0 || !is_word(e->wcprev)) && (wcnext != End && is_word(wcnext)))
 				execute_add(e, ncsv, k + 1, nstk, nsp, wcnext);
 			break;
-		case Node::ZEOW:
+		case ZEOW:
 			if ((e->off != 0 && is_word(e->wcprev)) && (wcnext == End || !is_word(wcnext)))
 				execute_add(e, ncsv, k + 1, nstk, nsp, wcnext);
 			break;
-		case Node::ZXOW:
+		case ZXOW:
 			if (   ((e->off == 0 || !is_word(e->wcprev)) && (wcnext != End && is_word(wcnext)))
 			    || ((e->off != 0 && is_word(e->wcprev)) && (wcnext == End || !is_word(wcnext))))
 				execute_add(e, ncsv, k + 1, nstk, nsp, wcnext);
 			break;
-		case Node::ZNWB:
+		case ZNWB:
 			if (   (e->off == 0 && wcnext == End)
 			    || (e->off == 0 && wcnext != End && !is_word(wcnext))
 			    || (e->off != 0 && !is_word(e->wcprev) && wcnext == End)
@@ -2127,8 +2126,6 @@ exit:
 	}
 }
 
-}
-
 int
 minrx_regcomp(minrx_regex_t *rx, const char *s, int flags)
 {
@@ -2144,14 +2141,14 @@ minrx_regexec(minrx_regex_t *rx, const char *s, size_t nm, minrx_regmatch_t *rm,
 int
 minrx_regncomp(minrx_regex_t *rx, size_t ns, const char *s, int flags)
 {
-	MinRX::WConv_Encoding enc = MinRX::MBtoWC;
+	WConv_Encoding enc = MBtoWC;
 	char *loc = setlocale(LC_CTYPE, nullptr);
 	if ((strcmp(loc, "C") == 0 || strcmp(loc, "POSIX") == 0 ||
 		(flags & MINRX_REG_NATIVE1B) != 0) && MB_CUR_MAX == 1)
-		enc = MinRX::Byte;
+		enc = Byte;
 	else if (strcmp(nl_langinfo(CODESET), "UTF-8") == 0)
-		enc = MinRX::UTF8;
-	MinRX::Compile c;
+		enc = UTF8;
+	Compile c;
 	c.flags = (minrx_regcomp_flags_t) flags;
 	c.enc = enc;
 	wconv_construct(&c.wconv, enc, s, s + ns);
@@ -2165,7 +2162,7 @@ minrx_regncomp(minrx_regex_t *rx, size_t ns, const char *s, int flags)
 	c.nmin = 0;
 	c.nsub = 0;
 	c.np = nullptr;
-	MinRX::Regexp *r = compile(&c);
+	Regexp *r = compile(&c);
 	rx->re_regexp = r;
 	rx->re_nsub = r->nsub - 1;
 	rx->re_compflags = (minrx_regcomp_flags_t) flags;
@@ -2175,18 +2172,18 @@ minrx_regncomp(minrx_regex_t *rx, size_t ns, const char *s, int flags)
 int
 minrx_regnexec(minrx_regex_t *rx, size_t ns, const char *s, size_t nm, minrx_regmatch_t *rm, int flags)
 {
-	MinRX::Regexp *r = reinterpret_cast<MinRX::Regexp *>(rx->re_regexp);
-	MinRX::Execute e;
-	MinRX::execute_construct(&e, r, (minrx_regexec_flags_t) flags, s, s + ns);
-	int ret = MinRX::execute(&e, nm, rm);
-	MinRX::execute_destruct(&e);
+	Regexp *r = reinterpret_cast<Regexp *>(rx->re_regexp);
+	Execute e;
+	execute_construct(&e, r, (minrx_regexec_flags_t) flags, s, s + ns);
+	int ret = execute(&e, nm, rm);
+	execute_destruct(&e);
 	return ret;
 }
 
 void
 minrx_regfree(minrx_regex_t *rx)
 {
-	delete reinterpret_cast<MinRX::Regexp *>(rx->re_regexp);
+	delete reinterpret_cast<Regexp *>(rx->re_regexp);
 	rx->re_regexp = nullptr;
 }
 
