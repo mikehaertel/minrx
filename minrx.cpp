@@ -597,7 +597,7 @@ struct QVecInsert {
 	NState *newnsp;
 };
 
-QVecInsert
+static QVecInsert
 qvec_insert(QVec *q, size_t k, const NState *)
 {
 	bool newly = qset_insert(&q->qset, k);
@@ -618,7 +618,7 @@ struct QVecRemove {
 	NState nstate;
 };
 
-QVecRemove
+static QVecRemove
 qvec_remove(QVec *q)
 {
 	size_t k = qset_remove(&q->qset);
