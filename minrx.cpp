@@ -512,13 +512,19 @@ qvec_empty(QVec *q)
 	return qset_empty(&q->qset);
 }
 
-static std::pair<bool, NState *>
+typedef struct QVecInsert QVecInsert;
+struct QVecInsert {
+	bool newly;
+	NState *newnsp;
+};
+
+QVecInsert
 qvec_insert(QVec *q, size_t k, const NState *)
 {
 	bool newly = qset_insert(&q->qset, k);
 	// WARNING: if newly inserted then we are returning a reference to uninitialized memory
 	// and it is the caller's responsibility to construct a valid NState there.
-	return {newly, &q->storage[k]};
+	return (QVecInsert) {newly, &q->storage[k]};
 }
 
 static NState *
@@ -527,12 +533,19 @@ qvec_lookup(QVec *q, size_t k)
 	return &q->storage[k];
 }
 
-static std::pair<size_t, NState>
+typedef struct QVecRemove QVecRemove;
+struct QVecRemove {
+	size_t index;
+	NState nstate;
+};
+
+QVecRemove
 qvec_remove(QVec *q)
 {
 	size_t k = qset_remove(&q->qset);
-	std::pair<size_t, NState> r {k, {}};
-	nstate_construct_move(&r.second, &q->storage[k]);
+	QVecRemove r;
+	r.index = k;
+	nstate_construct_move(&r.nstate, &q->storage[k]);
 	return r;
 }
 
@@ -1156,12 +1169,18 @@ struct Compile {
 	NodePool *np;
 };
 
+static NInt
+satmul(NInt x, NInt y)
+{
+	if (x == 0 || y == 0)
+		return 0;
+	NInt z = x * y;
+	return z / y == x ? z : (NInt) -1;
+}
+
 static bool
 num(Compile *c, NInt *np, WChar *wcp)
 {
-	auto satmul = [](NInt x, NInt y) -> NInt {
-		return (x == 0 || y == 0) ? 0 : ((x * y / x == y) ? x * y : -1);
-	};
 	if (*wcp < L'0' || *wcp > L'9')
 		return false;
 	NInt v = 0;
@@ -1644,6 +1663,15 @@ chr(Compile *c, bool nested, NInt nstk)
 	return {lhs, lhmaxstk, lhasmin, MINRX_REG_SUCCESS};
 }
 
+static void
+firstinsert(QSet *q, QSet *v, NInt n)
+{
+	if (!qset_contains(v, n)) {
+		qset_insert(q, n);
+		qset_insert(v, n);
+	}
+}
+
 static CSet *
 firstclosure(Compile *c, const Node *nodes, NInt nnode)
 {
@@ -1661,7 +1689,6 @@ firstclosure(Compile *c, const Node *nodes, NInt nnode)
 		qset_destruct(&epsv);
 		return nullptr;
 	}
-	auto add = [&epsq, &epsv](NInt n) { if (!qset_contains(&epsv, n)) { qset_insert(&epsq, n); qset_insert(&epsv, n); } };
 	qset_insert(&epsq, 0);
 	do {
 		NInt k = qset_remove(&epsq);
@@ -1677,24 +1704,24 @@ firstclosure(Compile *c, const Node *nodes, NInt nnode)
 				return {};
 			case Fork:
 				do {
-					add(k + 1);
+					firstinsert(&epsq, &epsv, k + 1);
 					k = k + 1 + nodes[k].args[0];
 				} while (nodes[k].type != Join);
 				break;
 			case Goto:
-				add(k + 1 + n.args[0]);
+				firstinsert(&epsq, &epsv, k + 1 + n.args[0]);
 				break;
 			case Loop:
-				add(k + 1);
+				firstinsert(&epsq, &epsv, k + 1);
 				if (n.args[1])
-					add(k + 1 + n.args[0]);
+					firstinsert(&epsq, &epsv, k + 1 + n.args[0]);
 				break;
 			case Skip:
-				add(k + 1);
-				add(k + 1 + n.args[0]);
+				firstinsert(&epsq, &epsv, k + 1);
+				firstinsert(&epsq, &epsv, k + 1 + n.args[0]);
 				break;
 			default:
-				add(k + 1);
+				firstinsert(&epsq, &epsv, k + 1);
 				break;
 			}
 	} while (!qset_empty(&epsq));
@@ -1847,42 +1874,53 @@ execute_add(Execute *e, QVec *ncsv, NInt k, NInt nstk, const NState *nsp, WChar 
 	const Node &n = e->nodes[k];
 	if (n.type <= Cset) {
 		if (n.type == (NInt) wcnext || (n.type == Cset && cset_test(csets_aref(&e->r->csets, n.args[0]), wcnext))) {
-			auto [newly, newnsp] = qvec_insert(ncsv, k, nsp);
-			if (newly)
-				nstate_construct_copy(newnsp, nsp);
-			else if (int x = nstate_cmp(nsp, newnsp, e->gen, nstk, xargs...); x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &newnsp->substack, e->minvcnt) > 0))
-				nstate_copy(newnsp, nsp);
+			QVecInsert qvi = qvec_insert(ncsv, k, nsp);
+			if (qvi.newly)
+				nstate_construct_copy(qvi.newnsp, nsp);
+			else if (int x = nstate_cmp(nsp, qvi.newnsp, e->gen, nstk, xargs...); x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &qvi.newnsp->substack, e->minvcnt) > 0))
+				nstate_copy(qvi.newnsp, nsp);
 			else
 				return;
-			newnsp->gen = e->gen;
+			qvi.newnsp->gen = e->gen;
 			if constexpr (sizeof... (XArgs) > 0) {
 				auto i = nstk - sizeof...(XArgs);
-				(cowvec_put(&newnsp->substack, i++, xargs), ...);
+				(cowvec_put(&qvi.newnsp->substack, i++, xargs), ...);
 			}
 		}
 	} else {
-		auto [newly, newnsp] = qvec_insert(&e->epsv, k, nsp);
-		if (newly)
-			nstate_construct_copy(newnsp, nsp);
-		else if (int x = nstate_cmp(nsp, newnsp, e->gen, nstk, xargs...); x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &newnsp->substack, e->minvcnt) > 0))
-			nstate_copy(newnsp, nsp);
+		QVecInsert qvi = qvec_insert(&e->epsv, k, nsp);
+		if (qvi.newly)
+			nstate_construct_copy(qvi.newnsp, nsp);
+		else if (int x = nstate_cmp(nsp, qvi.newnsp, e->gen, nstk, xargs...); x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &qvi.newnsp->substack, e->minvcnt) > 0))
+			nstate_copy(qvi.newnsp, nsp);
 		else
 			return;
-		newnsp->gen = e->gen;
+		qvi.newnsp->gen = e->gen;
 		if constexpr (sizeof... (XArgs) > 0) {
 			auto i = nstk - sizeof...(XArgs);
-			(cowvec_put(&newnsp->substack, i++, xargs), ...);
+			(cowvec_put(&qvi.newnsp->substack, i++, xargs), ...);
 		}
 		qset_insert(&e->epsq, k);
 	}
+}
+
+static bool
+is_word_byte(WChar b)
+{
+	return b == '_' || isalnum(b);
+}
+
+static bool
+is_word_wide(WChar wc)
+{
+	return wc == L'_' || iswalnum(wc);
 }
 
 static void
 execute_epsclosure(Execute *e, QVec *ncsv, WChar wcnext)
 {
 	const Node *nodes = e->nodes;
-	auto is_word = e->r->enc == Byte ? [](WChar b) { return b == '_' || isalnum(b); }
-					 : [](WChar wc) { return wc == L'_' || iswalnum(wc); };
+	bool (*is_word)(WChar) = e->r->enc == Byte ? is_word_byte : is_word_wide;
 	do {
 		NInt k = qset_remove(&e->epsq);
 		NState *nsp = qvec_lookup(&e->epsv, k);
@@ -2095,9 +2133,9 @@ execute(Execute *e, size_t nm, minrx_regmatch_t *rm)
 		++e->gen;
 		e->wcprev = wcnext, e->off = wconv_off(&e->wconv), wcnext = wconv_nextchr(&e->wconv);
 		while (!qvec_empty(&mcsvs[0])) {
-			auto [n, ns] = qvec_remove(&mcsvs[0]);
-			execute_add(e, &mcsvs[1], n + 1, e->nodes[n].nstk, &ns, wcnext);
-			nstate_destruct(&ns);
+			QVecRemove r = qvec_remove(&mcsvs[0]);
+			execute_add(e, &mcsvs[1], r.index + 1, e->nodes[r.index].nstk, &r.nstate, wcnext);
+			nstate_destruct(&r.nstate);
 		}
 		if (!cowvec_valid(&e->best)) {
 			nsinit.boff = e->off;
@@ -2116,9 +2154,9 @@ execute(Execute *e, size_t nm, minrx_regmatch_t *rm)
 		++e->gen;
 		e->wcprev = wcnext, e->off = wconv_off(&e->wconv), wcnext = wconv_nextchr(&e->wconv);
 		while (!qvec_empty(&mcsvs[1])) {
-			auto [n, ns] = qvec_remove(&mcsvs[1]);
-			execute_add(e, &mcsvs[0], n + 1, e->nodes[n].nstk, &ns, wcnext);
-			nstate_destruct(&ns);
+			QVecRemove r = qvec_remove(&mcsvs[1]);
+			execute_add(e, &mcsvs[0], r.index + 1, e->nodes[r.index].nstk, &r.nstate, wcnext);
+			nstate_destruct(&r.nstate);
 		}
 		if (!cowvec_valid(&e->best)) {
 			nsinit.boff = e->off;
