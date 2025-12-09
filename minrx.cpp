@@ -158,13 +158,13 @@ static void
 cowvec_allocator_construct(COWVec_Allocator *a, size_t length)
 {
 	a->length = length;
-	a->freelist = nullptr;
+	a->freelist = (COWVec_Storage *) NULL;
 }
 
 static void
 cowvec_allocator_destruct(COWVec_Allocator *a)
 {
-	for (COWVec_Storage *s = a->freelist, *sfreelink = nullptr; s != nullptr; s = sfreelink) {
+	for (COWVec_Storage *s = a->freelist, *sfreelink = (COWVec_Storage *) NULL; s != (COWVec_Storage *) NULL; s = sfreelink) {
 		sfreelink = s->u.freelink;
 		free(s);
 	}
@@ -226,7 +226,7 @@ cowvec_storage_dealloc(COWVec_Allocator *a, COWVec_Storage *s)
 static void
 cowvec_construct(COWVec *c, COWVec_Allocator *a)
 {
-	c->storage = a ? cowvec_storage_alloc(a) : nullptr;
+	c->storage = a ? cowvec_storage_alloc(a) : (COWVec_Storage *) NULL;
 }
 
 static void
@@ -234,7 +234,7 @@ cowvec_destruct(COWVec *c)
 {
 	if (c->storage && --c->storage->refcnt == 0)
 		cowvec_storage_dealloc(c->storage->u.allocator, c->storage);
-	c->storage = nullptr;
+	c->storage = (COWVec_Storage *) NULL;
 }
 
 static size_t
@@ -271,7 +271,7 @@ cowvec_move(COWVec *dst, COWVec *src)
 	if (dst->storage && --dst->storage->refcnt == 0)
 		cowvec_storage_dealloc(dst->storage->u.allocator, dst->storage);
 	dst->storage = src->storage;
-	src->storage = nullptr;
+	src->storage = (COWVec_Storage *) NULL;
 }
 
 static int
@@ -348,7 +348,7 @@ cowvec_cmp_from(size_t o, const COWVec *xcv, const COWVec *ycv, size_t n)
 static bool
 cowvec_valid(const COWVec *c)
 {
-	return c->storage != nullptr;
+	return c->storage != (COWVec_Storage *) NULL;
 }
 
 struct QSet {
@@ -494,14 +494,14 @@ nstate_destruct(NState *ns)
 static void
 nstate_construct_copy(NState *dstns, const NState *srcns)
 {
-	nstate_construct(dstns, nullptr);
+	nstate_construct(dstns, (COWVec_Allocator *) NULL);
 	nstate_copy(dstns, srcns);
 }
 
 static void
 nstate_construct_move(NState *dstns, NState *srcns)
 {
-	nstate_construct(dstns, nullptr);
+	nstate_construct(dstns, (COWVec_Allocator *) NULL);
 	nstate_move(dstns, srcns);
 }
 
@@ -563,7 +563,7 @@ qvec_construct(QVec *q, size_t l)
 {
 	if (!qset_construct(&q->qset, l))
 		return false;
-	q->storage = nullptr;
+	q->storage = (NState *) NULL;
 	q->storage = (NState *) malloc(l * sizeof (NState));
 	return true;
 }
@@ -782,7 +782,7 @@ cset_construct(CSet *cs, WConv_Encoding enc)
 {
 	int errcode = 0;
 	cs->charset = charset_create(&errcode, MB_CUR_MAX, enc == UTF8);
-	// FIXME: handle errcode or error if charset == nullptr
+	// FIXME: handle errcode or error if charset == NULL
 }
 
 static void
@@ -790,7 +790,7 @@ cset_destruct(CSet *cs)
 {
 	if (cs->charset) {
 		charset_free(cs->charset);
-		cs->charset = nullptr;
+		cs->charset = (charset_t *) NULL;
 	}
 }
 
@@ -1041,7 +1041,7 @@ struct CSets {
 static void
 csets_construct(CSets *csets)
 {
-	csets->data = nullptr;
+	csets->data = (CSet *) NULL;
 	csets->alloc = 0;
 	csets->count = 0;
 }
@@ -1075,7 +1075,7 @@ csets_clear(CSets *csets)
 		for (size_t i = 0, n = csets->count; i < n; i++)
 			cset_destruct(&csets->data[i]);
 		free((void *) csets->data);
-		csets->data = nullptr;
+		csets->data = (CSet *) NULL;
 		csets->alloc = 0;
 		csets->count = 0;
 	}
@@ -1148,7 +1148,7 @@ alloc(NodePool **npp, NInt type, NInt arg0, NInt arg1, NInt nstk)
 	if (!*npp || (*npp)->nalloc == NALLOC) {
 		NodePool *np = (NodePool *) malloc(sizeof (NodePool));
 		if (!np)
-			return nullptr;
+			return (ListNode *) NULL;
 		np->nalloc = 0;
 		np->prev = *npp;
 		*npp = np;
@@ -1173,7 +1173,7 @@ concatcopy(NodePool **npp, NodeList *x, const NodeList *y)
 		else
 			x->first = nn;
 		x->final = nn;
-		nn->next = nullptr;
+		nn->next = (ListNode *) NULL;
 	}
 	return true;
 }
@@ -1199,7 +1199,7 @@ emplace_first(NodePool **npp, NodeList *x, NInt type, NInt arg0, NInt arg1, NInt
 		n->next = x->first;
 		x->first = n;
 	} else {
-		n->next = nullptr;
+		n->next = (ListNode *) NULL;
 		x->first = x->final = n;
 	}
 	return true;
@@ -1216,7 +1216,7 @@ emplace_final(NodePool **npp, NodeList *x, NInt type, NInt arg0, NInt arg1, NInt
 	else
 		x->first = n;
 	x->final = n;
-	n->next = nullptr;
+	n->next = (ListNode *) NULL;
 	return true;
 }
 
@@ -1224,8 +1224,8 @@ static NodeList
 empty()
 {
 	NodeList r;
-	r.first = nullptr;
-	r.final = nullptr;
+	r.first = (ListNode *) NULL;
+	r.final = (ListNode *) NULL;
 	r.size = 0;
 	return r;
 }
@@ -1291,7 +1291,7 @@ alt(Compile *c, bool nested, NInt nstk)
 	if (lh.err != MINRX_REG_SUCCESS)
 		return lh;
 	if (c->wc == L'|') {
-		for (ListNode *l = lh.nodes.first; l != nullptr; l = l->next)
+		for (ListNode *l = lh.nodes.first; l != (ListNode *) NULL; l = l->next)
 			l->node.nstk += 1;
 		Subexp altspace[16], *alts = altspace;
 		size_t alloc = 16, count = 0;
@@ -1362,7 +1362,7 @@ minimize(Compile *c, Subexp lh, NInt nstk)
 {
 	if (lh.err != MINRX_REG_SUCCESS)
 		return lh;
-	for (ListNode *n = lh.nodes.first; n != nullptr; n = n->next)
+	for (ListNode *n = lh.nodes.first; n != (ListNode *) NULL; n = n->next)
 		n->node.nstk += 1;
 	if (!emplace_first(&c->np, &lh.nodes, MinL, 0, 0, nstk + 1) || !emplace_final(&c->np, &lh.nodes, MinR, 0, 0, nstk))
 		return {empty(), 0, false, MINRX_REG_ESPACE};
@@ -1376,7 +1376,7 @@ minraise(Compile *c, Subexp *lhp)
 	if (lhp->err != MINRX_REG_SUCCESS)
 		return;
 	NInt maxlevel = 0;
-	for (ListNode *n = lhp->nodes.first; n != nullptr; n = n->next)
+	for (ListNode *n = lhp->nodes.first; n != (ListNode *) NULL; n = n->next)
 		switch (n->node.type) {
 		case MinB:
 		case MinL:
@@ -1395,14 +1395,14 @@ mkrep(Compile *c, Subexp lh, bool optional, bool infinite, NInt nstk)
 	if (lh.err != MINRX_REG_SUCCESS)
 		return lh;
 	if (optional && !infinite) {
-		for (ListNode *l = lh.nodes.first; l != nullptr; l = l->next)
+		for (ListNode *l = lh.nodes.first; l != (ListNode *) NULL; l = l->next)
 			l->node.nstk += 2;
 		NInt lhsize = lh.nodes.size;
 		if (!emplace_first(&c->np, &lh.nodes, Skip, lhsize, 0, nstk + 2))
 			return {empty(), 0, false, MINRX_REG_ESPACE};
 		return {lh.nodes, lh.maxstk + 2, lh.hasmin, MINRX_REG_SUCCESS};
 	} else {
-		for (ListNode *l = lh.nodes.first; l != nullptr; l = l->next)
+		for (ListNode *l = lh.nodes.first; l != (ListNode *) NULL; l = l->next)
 			l->node.nstk += 3;
 		NInt lhsize = lh.nodes.size;
 		if (!emplace_first(&c->np, &lh.nodes, Loop, lhsize, (NInt) optional, nstk + 3) || !emplace_final(&c->np, &lh.nodes, Next, lhsize, (NInt) infinite, nstk))
@@ -1439,7 +1439,7 @@ mkrep_braces(Compile *c, Subexp lh, NInt m, NInt n, NInt nstk)
 	if (n != (NInt) -1 && k < n) {
 		lh.maxstk += 2;
 		rh.maxstk += 2;
-		for (ListNode *r = rh.nodes.first; r != nullptr; r = r->next)
+		for (ListNode *r = rh.nodes.first; r != (ListNode *) NULL; r = r->next)
 			r->node.nstk += 2;
 		NInt rhsize = rh.nodes.size;
 		if (!emplace_first(&c->np, &rh.nodes, Skip, rhsize, 1, nstk + 2))
@@ -1451,7 +1451,7 @@ mkrep_braces(Compile *c, Subexp lh, NInt m, NInt n, NInt nstk)
 	if (n == (NInt) -1) {
 		lh.maxstk += 3;
 		rh.maxstk += 3;
-		for (ListNode *r = rh.nodes.first; r != nullptr; r = r->next)
+		for (ListNode *r = rh.nodes.first; r != (ListNode *) NULL; r = r->next)
 			r->node.nstk += 3;
 		NInt rhsize = rh.nodes.size;
 		if (!emplace_first(&c->np, &rh.nodes, Loop, rhsize, 1, nstk + 3) || !emplace_final(&c->np, &rh.nodes, Next, rhsize, 1, nstk))
@@ -1753,18 +1753,18 @@ static CSet *
 firstclosure(Compile *c, const Node *nodes, NInt nnode)
 {
 	if (nnode == 0)
-		return nullptr;
+		return (CSet *) NULL;
 	QSet epsq, epsv, firsts;
 	if (!qset_construct(&epsq, nnode))
-		return nullptr;
+		return (CSet *) NULL;
 	if (!qset_construct(&epsv, nnode)) {
 		qset_destruct(&epsq);
-		return nullptr;
+		return (CSet *) NULL;
 	}
 	if (!qset_construct(&firsts, nnode)) {
 		qset_destruct(&epsq);
 		qset_destruct(&epsv);
-		return nullptr;
+		return (CSet *) NULL;
 	}
 	qset_insert(&epsq, 0);
 	do {
@@ -1829,7 +1829,7 @@ firstbytes(FirstBytes *fb, int32_t *fu, WConv_Encoding e, const CSet *firstcset)
 static Regexp *
 compile(Compile *c)
 {
-	Node *nodes = nullptr;
+	Node *nodes = (Node *) NULL;
 	NInt nnode = 0;
 	if ((c->flags & MINRX_REG_MINDISABLE) != 0 && (c->flags & MINRX_REG_MINIMAL) != 0) {
 		Regexp *r = (Regexp *) malloc(sizeof (Regexp));
@@ -1868,7 +1868,7 @@ compile(Compile *c)
 		q = p->prev;
 		free((void *) p);
 	}
-	c->np = nullptr;
+	c->np = (NodePool *) NULL;
 	CSet *fc = firstclosure(c, nodes, nnode);		// FIXME: check for allocation errors
 	FirstBytes fb;
 	int32_t fu = -1;
@@ -1927,7 +1927,7 @@ execute_construct(Execute *e, const Regexp *r, minrx_regexec_flags_t flags, cons
 	wconv_construct(&e->wconv, r->enc, bp, ep);
 	e->wcprev = End;
 	cowvec_allocator_construct(&e->allocator, e->nestoff + r->nmin);
-	cowvec_construct(&e->best, nullptr);
+	cowvec_construct(&e->best, (COWVec_Allocator *) NULL);
 	e->bestmincount = 0;
 	if (!qset_construct(&e->epsq, r->nnode))
 		return false;
@@ -2263,7 +2263,7 @@ execute(Execute *e, size_t nm, minrx_regmatch_t *rm)
 		const char *cp = e->wconv.cp, *ep = e->wconv.ep;
 		if (e->r->firstunique != -1) {
 			cp = (const char *) memchr(cp, e->r->firstunique, ep - cp);
-			if (cp == nullptr)
+			if (cp == (const char *) NULL)
 				goto exit;
 		} else {
 			const bool *fbvec = e->r->firstbytes.vec;
@@ -2375,7 +2375,7 @@ int
 minrx_regncomp(minrx_regex_t *rx, size_t ns, const char *s, int flags)
 {
 	WConv_Encoding enc = MBtoWC;
-	char *loc = setlocale(LC_CTYPE, nullptr);
+	char *loc = setlocale(LC_CTYPE, (const char *) NULL);
 	if ((strcmp(loc, "C") == 0 || strcmp(loc, "POSIX") == 0 ||
 		(flags & MINRX_REG_NATIVE1B) != 0) && MB_CUR_MAX == 1)
 		enc = Byte;
@@ -2394,7 +2394,7 @@ minrx_regncomp(minrx_regex_t *rx, size_t ns, const char *s, int flags)
 	c.esc_W = -1;
 	c.nmin = 0;
 	c.nsub = 0;
-	c.np = nullptr;
+	c.np = (NodePool *) NULL;
 	Regexp *r = compile(&c);
 	rx->re_regexp = r;
 	rx->re_nsub = r->nsub - 1;
@@ -2426,7 +2426,7 @@ minrx_regfree(minrx_regex_t *rx)
 		csets_clear(&r->csets);
 		free(r);
 	}
-	rx->re_regexp = nullptr;
+	rx->re_regexp = (Regexp *) NULL;
 }
 
 size_t
