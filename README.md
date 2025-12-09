@@ -6,9 +6,9 @@ MinRX is library for matching
 [POSIX Extended Regular Expressions](https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap09.html#tag_09_04)
 (EREs).
 
-MinRX is written in C++ 20, but exports a C API similar to the POSIX
+MinRX is written in C and exports an API similar to the POSIX
 [`<regex.h>`](https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/regex.h.html)
-functions, with C entry points for both counted and NUL-terminated
+functions, with entry points for both counted and NUL-terminated
 strings.  The MinRX function and macro names are generally constructed
 by prepending `minrx_` or `MINRX_` to the names of their POSIX `<regex.h>`
 counterparts.
@@ -129,8 +129,6 @@ Currently planned work:
   to any deterministic *finite* automaton, but it is equivalent to a
   "deterministic *infinite* automaton", and it might be feasible to cache
   a useful working subset of this infinite automaton's states.
-
-* Rewrite in C for improved portability.
 
 ## License
 

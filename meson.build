@@ -1,10 +1,10 @@
-project('minrx', ['c', 'cpp'],
+project('minrx', ['c'],
         version : '0.0.1',
-        default_options : ['warning_level=3', 'cpp_std=c++11'])
+        default_options : ['warning_level=3'])
 
 libminrx_inc = include_directories('.')
 libminrx_lib = library('minrx',
-		       'minrx.cpp',
+		       'minrx.c',
 		       install : true,
 		       soversion : '0')
 
