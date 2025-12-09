@@ -57,6 +57,13 @@
 // Arnold Robbins' charset library
 #include "charset.c"
 
+// Hack to reconcile C compound literal syntax with C++ initializer lists
+#ifdef __cplusplus
+#define LITERAL(TYPE)
+#else
+#define LITERAL(TYPE) (TYPE)
+#endif
+
 #ifdef __GNUC__
 #define inline __attribute__((__always_inline__)) inline
 #endif
@@ -351,6 +358,7 @@ cowvec_valid(const COWVec *c)
 	return c->storage != (COWVec_Storage *) NULL;
 }
 
+typedef struct QSet QSet;
 struct QSet {
 	uint64_t *bits[10];
 	uint64_t bits0;
@@ -455,6 +463,7 @@ qset_remove(QSet *q) // caller must ensure !empty()
 
 typedef size_t NInt;
 
+typedef struct NState NState;
 struct NState {
 	size_t gen;
 	size_t boff;
@@ -512,7 +521,8 @@ nstate_cmp(const NState *xns, const NState *yns, size_t gen, size_t nstk)
 		return cmp(gen, yns->gen);
 	if (xns->boff != yns->boff)
 		return cmp(yns->boff, xns->boff);
-	if (int x = cowvec_cmp(&xns->substack, &yns->substack, nstk); x != 0)
+	int x = cowvec_cmp(&xns->substack, &yns->substack, nstk);
+	if (x != 0)
 		return x;
 	return 0;
 }
@@ -524,7 +534,8 @@ nstate_cmp_1(const NState *xns, const NState *yns, size_t gen, size_t nstk, NInt
 		return cmp(gen, yns->gen);
 	if (xns->boff != yns->boff)
 		return cmp(yns->boff, xns->boff);
-	if (int x = cowvec_cmp_1(&xns->substack, &yns->substack, nstk, arg1); x != 0)
+	int x = cowvec_cmp_1(&xns->substack, &yns->substack, nstk, arg1);
+	if (x != 0)
 		return x;
 	return 0;
 }
@@ -536,7 +547,8 @@ nstate_cmp_2(const NState *xns, const NState *yns, size_t gen, size_t nstk, NInt
 		return cmp(gen, yns->gen);
 	if (xns->boff != yns->boff)
 		return cmp(yns->boff, xns->boff);
-	if (int x = cowvec_cmp_2(&xns->substack, &yns->substack, nstk, arg1, arg2); x != 0)
+	int x = cowvec_cmp_2(&xns->substack, &yns->substack, nstk, arg1, arg2);
+	if (x != 0)
 		return x;
 	return 0;
 }
@@ -548,11 +560,13 @@ nstate_cmp_3(const NState *xns, const NState *yns, size_t gen, size_t nstk, NInt
 		return cmp(gen, yns->gen);
 	if (xns->boff != yns->boff)
 		return cmp(yns->boff, xns->boff);
-	if (int x = cowvec_cmp_3(&xns->substack, &yns->substack, nstk, arg1, arg2, arg3); x != 0)
+	int x = cowvec_cmp_3(&xns->substack, &yns->substack, nstk, arg1, arg2, arg3);
+	if (x != 0)
 		return x;
 	return 0;
 }
 
+typedef struct QVec QVec;
 struct QVec {
 	QSet qset;
 	NState *storage;
@@ -603,7 +617,7 @@ qvec_insert(QVec *q, size_t k, const NState *)
 	bool newly = qset_insert(&q->qset, k);
 	// WARNING: if newly inserted then we are returning a reference to uninitialized memory
 	// and it is the caller's responsibility to construct a valid NState there.
-	return {newly, &q->storage[k]};
+	return LITERAL(QVecInsert) {newly, &q->storage[k]};
 }
 
 static NState *
@@ -629,8 +643,8 @@ qvec_remove(QVec *q)
 }
 
 typedef int32_t WChar;			// because wchar_t may not be 32 bits
-constexpr int32_t WCharMax = 0x10FFFF;	// maximum code point: valid for Unicode and (FIXME!) blithely assumed for non-Unicode
-enum WConv_Encoding { Byte, MBtoWC, UTF8 };
+#define WCharMax ((WChar) 0x10FFFF)	/* maximum code point: valid for Unicode and (FIXME!) blithely assumed for non-Unicode */
+typedef enum WConv_Encoding { Byte, MBtoWC, UTF8 } WConv_Encoding;
 enum { End = -1 };
 
 typedef struct WConv WConv;
@@ -820,12 +834,16 @@ cset_set_range(CSet *cs, WChar wclo, WChar wchi)
 }
 
 static CSet *
-cset_set(CSet *cs, WChar wc, bool ignore_case = false)
+cset_set(CSet *cs, WChar wc)
 {
-	if (ignore_case)
-		charset_add_char_ic(cs->charset, wc);	// FIXME: check for errors
-	else
-		charset_add_char(cs->charset, wc);	// FIXME: check for errors
+	charset_add_char(cs->charset, wc);	// FIXME: check for errors
+	return cs;
+}
+
+static CSet *
+cset_set_ic(CSet *cs, WChar wc)
+{
+	charset_add_char_ic(cs->charset, wc);	// FIXME: check for errors
 	return cs;
 }
 
@@ -998,6 +1016,7 @@ cset_firstbytes(const CSet *cs, FirstBytes *fb, int32_t *fu, WConv_Encoding e)
 	return true;
 }
 
+typedef struct Node Node;
 struct Node {
 	NInt type;
 	NInt args[2];
@@ -1099,6 +1118,7 @@ csets_size(CSets *csets)
 	return csets->count;
 }
 
+typedef struct Regexp Regexp;
 struct Regexp {
 	WConv_Encoding enc;
 	minrx_result_t err;
@@ -1230,6 +1250,7 @@ empty()
 	return r;
 }
 
+typedef struct Compile Compile;
 struct Compile {
 	minrx_regcomp_flags_t flags;
 	WConv_Encoding enc;
@@ -1276,6 +1297,7 @@ num(Compile *c, NInt *np, WChar *wcp)
 	return true;
 }
 
+typedef struct Subexp Subexp;
 struct Subexp {
 	NodeList nodes;
 	size_t maxstk;
@@ -1314,7 +1336,7 @@ alt(Compile *c, bool nested, NInt nstk)
 		if (rh.err != MINRX_REG_SUCCESS)
 			return rh;
 		if (!emplace_first(&c->np, &rh.nodes, Goto, rh.nodes.size, rh.nodes.size + 1, nstk + 1))
-			return {empty(), 0, false, MINRX_REG_ESPACE};
+			return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 		--count;
 		while (count > 0) {
 			Subexp mh = alts[--count];
@@ -1324,19 +1346,19 @@ alt(Compile *c, bool nested, NInt nstk)
 			rh.hasmin |= mh.hasmin;
 			rh.nodes = mh.nodes;
 			if (!emplace_first(&c->np, &rh.nodes, Goto, mhsize, rh.nodes.size + 1, nstk + 1))
-				return {empty(), 0, false, MINRX_REG_ESPACE};
+				return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 		}
 		if (alts != altspace)
 			free((void *) alts);
 		if (!emplace_first(&c->np, &lh.nodes, Fork, lh.nodes.size, 0, nstk + 1))
-			return {empty(), 0, false, MINRX_REG_ESPACE};
+			return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 		concatmove(&lh.nodes, &rh.nodes);
 		lh.maxstk = MAX(lh.maxstk, rh.maxstk);
 		lh.hasmin |= rh.hasmin;
 		if (!emplace_final(&c->np, &lh.nodes, Join, lh.nodes.size - 1, 0, nstk + 1))
-			return {empty(), 0, false, MINRX_REG_ESPACE};
+			return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 	}
-	return {lh.nodes, lh.maxstk, lh.hasmin, MINRX_REG_SUCCESS};
+	return LITERAL(Subexp) {lh.nodes, lh.maxstk, lh.hasmin, MINRX_REG_SUCCESS};
 }
 
 static Subexp rep(Compile *, bool, NInt);
@@ -1365,9 +1387,9 @@ minimize(Compile *c, Subexp lh, NInt nstk)
 	for (ListNode *n = lh.nodes.first; n != (ListNode *) NULL; n = n->next)
 		n->node.nstk += 1;
 	if (!emplace_first(&c->np, &lh.nodes, MinL, 0, 0, nstk + 1) || !emplace_final(&c->np, &lh.nodes, MinR, 0, 0, nstk))
-		return {empty(), 0, false, MINRX_REG_ESPACE};
+		return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 	c->nmin = MAX(c->nmin, (size_t) 1);
-	return {lh.nodes, lh.maxstk + 1, true, lh.err};
+	return LITERAL(Subexp) {lh.nodes, lh.maxstk + 1, true, lh.err};
 }
 
 static void
@@ -1399,15 +1421,15 @@ mkrep(Compile *c, Subexp lh, bool optional, bool infinite, NInt nstk)
 			l->node.nstk += 2;
 		NInt lhsize = lh.nodes.size;
 		if (!emplace_first(&c->np, &lh.nodes, Skip, lhsize, 0, nstk + 2))
-			return {empty(), 0, false, MINRX_REG_ESPACE};
-		return {lh.nodes, lh.maxstk + 2, lh.hasmin, MINRX_REG_SUCCESS};
+			return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
+		return LITERAL(Subexp) {lh.nodes, lh.maxstk + 2, lh.hasmin, MINRX_REG_SUCCESS};
 	} else {
 		for (ListNode *l = lh.nodes.first; l != (ListNode *) NULL; l = l->next)
 			l->node.nstk += 3;
 		NInt lhsize = lh.nodes.size;
 		if (!emplace_first(&c->np, &lh.nodes, Loop, lhsize, (NInt) optional, nstk + 3) || !emplace_final(&c->np, &lh.nodes, Next, lhsize, (NInt) infinite, nstk))
-			return {empty(), 0, false, MINRX_REG_ESPACE};
-		return {lh.nodes, lh.maxstk + 3, lh.hasmin, MINRX_REG_SUCCESS};
+			return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
+		return LITERAL(Subexp) {lh.nodes, lh.maxstk + 3, lh.hasmin, MINRX_REG_SUCCESS};
 	}
 }
 
@@ -1417,9 +1439,9 @@ mkrep_braces(Compile *c, Subexp lh, NInt m, NInt n, NInt nstk)
 	if (lh.err != MINRX_REG_SUCCESS)
 		return lh;
 	if ((m != (NInt) -1 && m > RE_DUP_MAX) || (n != (NInt) -1 && n > RE_DUP_MAX) || m > n)
-		return {{}, 0, false, MINRX_REG_BADBR};
+		return LITERAL(Subexp) {{}, 0, false, MINRX_REG_BADBR};
 	if (n == 0)
-		return {{}, 0, false, MINRX_REG_SUCCESS};
+		return LITERAL(Subexp) {{}, 0, false, MINRX_REG_SUCCESS};
 	if (m == 0 && n == 1)
 		return mkrep(c, lh, true, false, nstk);
 	if (m == 0 && n == (NInt) -1)
@@ -1432,10 +1454,10 @@ mkrep_braces(Compile *c, Subexp lh, NInt m, NInt n, NInt nstk)
 	NInt k;
 	lh.nodes = empty();
 	if (!concatcopy(&c->np, &lh.nodes, &rh.nodes))	// force initial lhs to be a copy
-		return {empty(), 0, false, MINRX_REG_ESPACE};
+		return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 	for (k = 1; k < m; ++k)
 		if (!concatcopy(&c->np, &lh.nodes, &rh.nodes))
-			return {empty(), 0, false, MINRX_REG_ESPACE};
+			return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 	if (n != (NInt) -1 && k < n) {
 		lh.maxstk += 2;
 		rh.maxstk += 2;
@@ -1443,10 +1465,10 @@ mkrep_braces(Compile *c, Subexp lh, NInt m, NInt n, NInt nstk)
 			r->node.nstk += 2;
 		NInt rhsize = rh.nodes.size;
 		if (!emplace_first(&c->np, &rh.nodes, Skip, rhsize, 1, nstk + 2))
-			return {empty(), 0, false, MINRX_REG_ESPACE};
+			return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 		for (; k < n; ++k)
 			if (!concatcopy(&c->np, &lh.nodes, &rh.nodes))
-				return {empty(), 0, false, MINRX_REG_ESPACE};
+				return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 	}
 	if (n == (NInt) -1) {
 		lh.maxstk += 3;
@@ -1455,13 +1477,13 @@ mkrep_braces(Compile *c, Subexp lh, NInt m, NInt n, NInt nstk)
 			r->node.nstk += 3;
 		NInt rhsize = rh.nodes.size;
 		if (!emplace_first(&c->np, &rh.nodes, Loop, rhsize, 1, nstk + 3) || !emplace_final(&c->np, &rh.nodes, Next, rhsize, 1, nstk))
-			return {empty(), 0, false, MINRX_REG_ESPACE};
+			return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 		concatmove(&lh.nodes, &rh.nodes);
 	}
 	if (m == 0)
-		return mkrep(c, {lh.nodes, rh.maxstk, rh.hasmin, MINRX_REG_SUCCESS}, true, false, nstk);
+		return mkrep(c, LITERAL(Subexp) {lh.nodes, rh.maxstk, rh.hasmin, MINRX_REG_SUCCESS}, true, false, nstk);
 	else
-		return {lh.nodes, rh.maxstk, rh.hasmin, MINRX_REG_SUCCESS};
+		return LITERAL(Subexp) {lh.nodes, rh.maxstk, rh.hasmin, MINRX_REG_SUCCESS};
 }
 
 static Subexp chr(Compile *, bool, NInt);
@@ -1490,7 +1512,7 @@ rep(Compile *c, bool nested, NInt nstk)
 			lh = mkrep(c, minimal ? minimize(c, lh, nstk) : lh, optional, infinite, nstk);
 		comout:	if (minimal) {
 				if (!emplace_first(&c->np, &lh.nodes, MinB, 0, 0, nstk))
-					return {empty(), 0, false, MINRX_REG_ESPACE};
+					return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 				hasmin = true;
 			}
 			lh.hasmin = hasmin;
@@ -1501,10 +1523,10 @@ rep(Compile *c, bool nested, NInt nstk)
 			{
 				c->wc = wconv_nextchr(&c->wconv);
 				if (c->wc == End)
-					return {{}, 0, false, MINRX_REG_EBRACE};
+					return LITERAL(Subexp) {{}, 0, false, MINRX_REG_EBRACE};
 				NInt m, n;
 				if (!num(c, &m, &c->wc))
-					return {{}, 0, false, MINRX_REG_BADBR};
+					return LITERAL(Subexp) {{}, 0, false, MINRX_REG_BADBR};
 				if (c->wc == L'}') {
 					if ((c->flags & MINRX_REG_MINDISABLE) == 0 && (c->wc = wconv_nextchr(&c->wconv)) == L'?')
 						minimal ^= true, c->wc = wconv_nextchr(&c->wconv);
@@ -1514,9 +1536,9 @@ rep(Compile *c, bool nested, NInt nstk)
 					goto comout;
 				}
 				if (c->wc == End)
-					return {{}, 0, false, MINRX_REG_EBRACE};
+					return LITERAL(Subexp) {{}, 0, false, MINRX_REG_EBRACE};
 				if (c->wc != L',')
-					return {{}, 0, false, MINRX_REG_BADBR};
+					return LITERAL(Subexp) {{}, 0, false, MINRX_REG_BADBR};
 				c->wc = wconv_nextchr(&c->wconv);
 				if (c->wc == L'}') {
 					if ((c->flags & MINRX_REG_MINDISABLE) == 0 && (c->wc = wconv_nextchr(&c->wconv)) == L'?')
@@ -1527,11 +1549,11 @@ rep(Compile *c, bool nested, NInt nstk)
 					goto comout;
 				}
 				if (!num(c, &n, &c->wc))
-					return {{}, 0, false, MINRX_REG_BADBR};
+					return LITERAL(Subexp) {{}, 0, false, MINRX_REG_BADBR};
 				if (c->wc == End)
-					return {{}, 0, false, MINRX_REG_EBRACE};
+					return LITERAL(Subexp) {{}, 0, false, MINRX_REG_EBRACE};
 				if (c->wc != L'}')
-					return {{}, 0, false, MINRX_REG_BADBR};
+					return LITERAL(Subexp) {{}, 0, false, MINRX_REG_BADBR};
 				if ((c->flags & MINRX_REG_MINDISABLE) == 0 && (c->wc = wconv_nextchr(&c->wconv)) == L'?')
 					minimal ^= true, c->wc = wconv_nextchr(&c->wconv);
 				if (hasmin)
@@ -1558,12 +1580,12 @@ chr(Compile *c, bool nested, NInt nstk)
 		lhmaxstk = nstk;
 		if ((c->flags & MINRX_REG_ICASE) == 0) {
 			if (!emplace_first(&c->np, &lhs, (NInt) c->wc, 0, 0, nstk))
-				return {empty(), 0, false, MINRX_REG_ESPACE};
+				return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 		} else {
 			csets_emplace_back(&c->csets, c->enc);	// FIXME: check for error
-			cset_set(csets_back(&c->csets), c->wc, true);
+			cset_set_ic(csets_back(&c->csets), c->wc);
 			if (!emplace_final(&c->np, &lhs, Cset, csets_size(&c->csets) - 1, 0, nstk))
-				return {empty(), 0, false, MINRX_REG_ESPACE};
+				return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 		}
 		c->wc = wconv_nextchr(&c->wconv);
 		break;
@@ -1575,14 +1597,17 @@ chr(Compile *c, bool nested, NInt nstk)
 	case L'*':
 	case L'+':
 	case L'?':
-		return {empty(), 0, false, MINRX_REG_BADRPT};
+		return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_BADRPT};
 	case L'[':
 		lhmaxstk = nstk;
 		if (!emplace_final(&c->np, &lhs, Cset, csets_size(&c->csets), 0, nstk))
-			return {empty(), 0, false, MINRX_REG_ESPACE};
+			return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 		csets_emplace_back(&c->csets, c->enc);		// FIXME: check for error
-		if (minrx_result_t err = cset_parse(csets_back(&c->csets), c->flags, c->enc, &c->wconv))
-			return {empty(), 0, false, err};
+		{
+			minrx_result_t err = cset_parse(csets_back(&c->csets), c->flags, c->enc, &c->wconv);
+			if (err)
+				return LITERAL(Subexp) {empty(), 0, false, err};
+		}
 		c->wc = wconv_nextchr(&c->wconv);
 		break;
 	case L'.':
@@ -1595,19 +1620,19 @@ chr(Compile *c, bool nested, NInt nstk)
 		}
 		lhmaxstk = nstk;
 		if (!emplace_final(&c->np, &lhs, Cset, c->dot, 0, nstk))
-			return {empty(), 0, false, MINRX_REG_ESPACE};
+			return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 		c->wc = wconv_nextchr(&c->wconv);
 		break;
 	case L'^':
 		lhmaxstk = nstk;
 		if (!emplace_final(&c->np, &lhs, (c->flags & MINRX_REG_NEWLINE) == 0 ? ZBOB : ZBOL, 0, 0, nstk))
-			return {empty(), 0, false, MINRX_REG_ESPACE};
+			return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 		c->wc = wconv_nextchr(&c->wconv);
 		break;
 	case L'$':
 		lhmaxstk = nstk;
 		if (!emplace_final(&c->np, &lhs, (c->flags & MINRX_REG_NEWLINE) == 0 ? ZEOB : ZEOL, 0, 0, nstk))
-			return {empty(), 0, false, MINRX_REG_ESPACE};
+			return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 		c->wc = wconv_nextchr(&c->wconv);
 		break;
 	case L'\\':
@@ -1618,37 +1643,37 @@ chr(Compile *c, bool nested, NInt nstk)
 			if ((c->flags & MINRX_REG_EXTENSIONS_BSD) == 0)
 				goto normal;
 			if (!emplace_final(&c->np, &lhs, ZBOW, 0, 0, nstk))
-				return {empty(), 0, false, MINRX_REG_ESPACE};
+				return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 			break;
 		case L'>':
 			if ((c->flags & MINRX_REG_EXTENSIONS_BSD) == 0)
 				goto normal;
 			if (!emplace_final(&c->np, &lhs, ZEOW, 0, 0, nstk))
-				return {empty(), 0, false, MINRX_REG_ESPACE};
+				return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 			break;
 		case L'`':
 			if ((c->flags & MINRX_REG_EXTENSIONS_GNU) == 0)
 				goto normal;
 			if (!emplace_final(&c->np, &lhs, ZBOB, 0, 0, nstk))
-				return {empty(), 0, false, MINRX_REG_ESPACE};
+				return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 			break;
 		case L'\'':
 			if ((c->flags & MINRX_REG_EXTENSIONS_GNU) == 0)
 				goto normal;
 			if (!emplace_final(&c->np, &lhs, ZEOB, 0, 0, nstk))
-				return {empty(), 0, false, MINRX_REG_ESPACE};
+				return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 			break;
 		case L'b':
 			if ((c->flags & MINRX_REG_EXTENSIONS_GNU) == 0)
 				goto normal;
 			if (!emplace_final(&c->np, &lhs, ZXOW, 0, 0, nstk))
-				return {empty(), 0, false, MINRX_REG_ESPACE};
+				return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 			break;
 		case L'B':
 			if ((c->flags & MINRX_REG_EXTENSIONS_GNU) == 0)
 				goto normal;
 			if (!emplace_final(&c->np, &lhs, ZNWB, 0, 0, nstk))
-				return {empty(), 0, false, MINRX_REG_ESPACE};
+				return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 			break;
 		case L's':
 			if ((c->flags & MINRX_REG_EXTENSIONS_GNU) == 0)
@@ -1661,7 +1686,7 @@ chr(Compile *c, bool nested, NInt nstk)
 				cset_parse(csets_back(&c->csets), c->flags, c->enc, &wconv);
 			}
 			if (!emplace_final(&c->np, &lhs, Cset, c->esc_s, 0, nstk))
-				return {empty(), 0, false, MINRX_REG_ESPACE};
+				return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 			break;
 		case L'S':
 			if ((c->flags & MINRX_REG_EXTENSIONS_GNU) == 0)
@@ -1674,7 +1699,7 @@ chr(Compile *c, bool nested, NInt nstk)
 				cset_parse(csets_back(&c->csets), c->flags, c->enc, &wconv);
 			}
 			if (!emplace_final(&c->np, &lhs, Cset, c->esc_S, 0, nstk))
-				return {empty(), 0, false, MINRX_REG_ESPACE};
+				return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 			break;
 		case L'w':
 			if ((c->flags & MINRX_REG_EXTENSIONS_GNU) == 0)
@@ -1687,7 +1712,7 @@ chr(Compile *c, bool nested, NInt nstk)
 				cset_parse(csets_back(&c->csets), c->flags, c->enc, &wconv);
 			}
 			if (!emplace_final(&c->np, &lhs, Cset, c->esc_w, 0, nstk))
-				return {empty(), 0, false, MINRX_REG_ESPACE};
+				return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 			break;
 		case L'W':
 			if ((c->flags & MINRX_REG_EXTENSIONS_GNU) == 0)
@@ -1700,10 +1725,10 @@ chr(Compile *c, bool nested, NInt nstk)
 				cset_parse(csets_back(&c->csets), c->flags, c->enc, &wconv);
 			}
 			if (!emplace_final(&c->np, &lhs, Cset, c->esc_W, 0, nstk))
-				return {empty(), 0, false, MINRX_REG_ESPACE};
+				return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 			break;
 		case End:
-			return {{}, 0, false, MINRX_REG_EESCAPE};
+			return LITERAL(Subexp) {{}, 0, false, MINRX_REG_EESCAPE};
 		default:
 			goto normal;
 		}
@@ -1720,11 +1745,11 @@ chr(Compile *c, bool nested, NInt nstk)
 			lhasmin = lh.hasmin;
 			err = lh.err;
 			if (err)
-				return {lhs, lhmaxstk, lhasmin, err};
+				return LITERAL(Subexp) {lhs, lhmaxstk, lhasmin, err};
 			if (c->wc != L')')
-				return {{}, 0, false, MINRX_REG_EPAREN};
+				return LITERAL(Subexp) {{}, 0, false, MINRX_REG_EPAREN};
 			if (!emplace_first(&c->np, &lhs, SubL, n, c->nsub, nstk + 1) || !emplace_final(&c->np, &lhs, SubR, n, c->nsub, nstk))
-				return {empty(), 0, false, MINRX_REG_ESPACE};
+				return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 			c->wc = wconv_nextchr(&c->wconv);
 		}
 		break;
@@ -1737,7 +1762,7 @@ chr(Compile *c, bool nested, NInt nstk)
 		lhmaxstk = nstk;
 		break;
 	}
-	return {lhs, lhmaxstk, lhasmin, MINRX_REG_SUCCESS};
+	return LITERAL(Subexp) {lhs, lhmaxstk, lhasmin, MINRX_REG_SUCCESS};
 }
 
 static void
@@ -1769,16 +1794,16 @@ firstclosure(Compile *c, const Node *nodes, NInt nnode)
 	qset_insert(&epsq, 0);
 	do {
 		NInt k = qset_remove(&epsq);
-		const Node &n = nodes[k];
-		if (n.type <= Cset)
+		const Node *np = &nodes[k];
+		if (np->type <= Cset)
 			qset_insert(&firsts, k);
 		else
-			switch (n.type) {
+			switch (np->type) {
 			case Exit:
 				qset_destruct(&firsts);
 				qset_destruct(&epsv);
 				qset_destruct(&epsq);
-				return {};
+				return (CSet *) NULL;
 			case Fork:
 				do {
 					firstinsert(&epsq, &epsv, k + 1);
@@ -1786,16 +1811,16 @@ firstclosure(Compile *c, const Node *nodes, NInt nnode)
 				} while (nodes[k].type != Join);
 				break;
 			case Goto:
-				firstinsert(&epsq, &epsv, k + 1 + n.args[0]);
+				firstinsert(&epsq, &epsv, k + 1 + np->args[0]);
 				break;
 			case Loop:
 				firstinsert(&epsq, &epsv, k + 1);
-				if (n.args[1])
-					firstinsert(&epsq, &epsv, k + 1 + n.args[0]);
+				if (np->args[1])
+					firstinsert(&epsq, &epsv, k + 1 + np->args[0]);
 				break;
 			case Skip:
 				firstinsert(&epsq, &epsv, k + 1);
-				firstinsert(&epsq, &epsv, k + 1 + n.args[0]);
+				firstinsert(&epsq, &epsv, k + 1 + np->args[0]);
 				break;
 			default:
 				firstinsert(&epsq, &epsv, k + 1);
@@ -1893,6 +1918,7 @@ compile(Compile *c)
 
 static const size_t SizeBits = CHAR_BIT * sizeof (size_t); // FIXME: find the technically correct way to do this
 
+typedef struct Execute Execute;
 struct Execute {
 	const Regexp *r;
 	minrx_regexec_flags_t flags;
@@ -1947,26 +1973,32 @@ execute_destruct(Execute *e)
 inline static void
 execute_add(Execute *e, QVec *ncsv, NInt k, NInt nstk, const NState *nsp, WChar wcnext)
 {
-	const Node &n = e->nodes[k];
-	if (n.type <= Cset) {
-		if (n.type == (NInt) wcnext || (n.type == Cset && cset_test(csets_aref(&e->r->csets, n.args[0]), wcnext))) {
+	const Node *np = &e->nodes[k];
+	if (np->type <= Cset) {
+		if (np->type == (NInt) wcnext || (np->type == Cset && cset_test(csets_aref(&e->r->csets, np->args[0]), wcnext))) {
 			QVecInsert qvi = qvec_insert(ncsv, k, nsp);
-			if (qvi.newly)
+			if (qvi.newly) {
 				nstate_construct_copy(qvi.newnsp, nsp);
-			else if (int x = nstate_cmp(nsp, qvi.newnsp, e->gen, nstk); x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &qvi.newnsp->substack, e->minvcnt) > 0))
-				nstate_copy(qvi.newnsp, nsp);
-			else
-				return;
+			} else {
+				int x = nstate_cmp(nsp, qvi.newnsp, e->gen, nstk);
+				if (x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &qvi.newnsp->substack, e->minvcnt) > 0))
+					nstate_copy(qvi.newnsp, nsp);
+				else
+					return;
+			}
 			qvi.newnsp->gen = e->gen;
 		}
 	} else {
 		QVecInsert qvi = qvec_insert(&e->epsv, k, nsp);
-		if (qvi.newly)
+		if (qvi.newly) {
 			nstate_construct_copy(qvi.newnsp, nsp);
-		else if (int x = nstate_cmp(nsp, qvi.newnsp, e->gen, nstk); x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &qvi.newnsp->substack, e->minvcnt) > 0))
-			nstate_copy(qvi.newnsp, nsp);
-		else
-			return;
+		} else {
+			int x = nstate_cmp(nsp, qvi.newnsp, e->gen, nstk);
+			if (x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &qvi.newnsp->substack, e->minvcnt) > 0))
+				nstate_copy(qvi.newnsp, nsp);
+			else
+				return;
+		}
 		qvi.newnsp->gen = e->gen;
 		qset_insert(&e->epsq, k);
 	}
@@ -1975,27 +2007,33 @@ execute_add(Execute *e, QVec *ncsv, NInt k, NInt nstk, const NState *nsp, WChar 
 inline static void
 execute_add_1(Execute *e, QVec *ncsv, NInt k, NInt nstk, const NState *nsp, WChar wcnext, NInt arg1)
 {
-	const Node &n = e->nodes[k];
-	if (n.type <= Cset) {
-		if (n.type == (NInt) wcnext || (n.type == Cset && cset_test(csets_aref(&e->r->csets, n.args[0]), wcnext))) {
+	const Node *np = &e->nodes[k];
+	if (np->type <= Cset) {
+		if (np->type == (NInt) wcnext || (np->type == Cset && cset_test(csets_aref(&e->r->csets, np->args[0]), wcnext))) {
 			QVecInsert qvi = qvec_insert(ncsv, k, nsp);
-			if (qvi.newly)
+			if (qvi.newly) {
 				nstate_construct_copy(qvi.newnsp, nsp);
-			else if (int x = nstate_cmp_1(nsp, qvi.newnsp, e->gen, nstk, arg1); x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &qvi.newnsp->substack, e->minvcnt) > 0))
-				nstate_copy(qvi.newnsp, nsp);
-			else
-				return;
+			} else {
+				int x = nstate_cmp_1(nsp, qvi.newnsp, e->gen, nstk, arg1);
+				if (x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &qvi.newnsp->substack, e->minvcnt) > 0))
+					nstate_copy(qvi.newnsp, nsp);
+				else
+					return;
+			}
 			qvi.newnsp->gen = e->gen;
 			cowvec_put(&qvi.newnsp->substack, nstk - 1, arg1);
 		}
 	} else {
 		QVecInsert qvi = qvec_insert(&e->epsv, k, nsp);
-		if (qvi.newly)
+		if (qvi.newly) {
 			nstate_construct_copy(qvi.newnsp, nsp);
-		else if (int x = nstate_cmp_1(nsp, qvi.newnsp, e->gen, nstk, arg1); x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &qvi.newnsp->substack, e->minvcnt) > 0))
-			nstate_copy(qvi.newnsp, nsp);
-		else
-			return;
+		} else {
+			int x = nstate_cmp_1(nsp, qvi.newnsp, e->gen, nstk, arg1);
+			if (x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &qvi.newnsp->substack, e->minvcnt) > 0))
+				nstate_copy(qvi.newnsp, nsp);
+			else
+				return;
+		}
 		qvi.newnsp->gen = e->gen;
 		cowvec_put(&qvi.newnsp->substack, nstk - 1, arg1);
 		qset_insert(&e->epsq, k);
@@ -2005,28 +2043,34 @@ execute_add_1(Execute *e, QVec *ncsv, NInt k, NInt nstk, const NState *nsp, WCha
 inline static void
 execute_add_2(Execute *e, QVec *ncsv, NInt k, NInt nstk, const NState *nsp, WChar wcnext, NInt arg1, NInt arg2)
 {
-	const Node &n = e->nodes[k];
-	if (n.type <= Cset) {
-		if (n.type == (NInt) wcnext || (n.type == Cset && cset_test(csets_aref(&e->r->csets, n.args[0]), wcnext))) {
+	const Node *np = &e->nodes[k];
+	if (np->type <= Cset) {
+		if (np->type == (NInt) wcnext || (np->type == Cset && cset_test(csets_aref(&e->r->csets, np->args[0]), wcnext))) {
 			QVecInsert qvi = qvec_insert(ncsv, k, nsp);
-			if (qvi.newly)
+			if (qvi.newly) {
 				nstate_construct_copy(qvi.newnsp, nsp);
-			else if (int x = nstate_cmp_2(nsp, qvi.newnsp, e->gen, nstk, arg1, arg2); x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &qvi.newnsp->substack, e->minvcnt) > 0))
-				nstate_copy(qvi.newnsp, nsp);
-			else
-				return;
+			} else {
+				int x = nstate_cmp_2(nsp, qvi.newnsp, e->gen, nstk, arg1, arg2);
+				if (x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &qvi.newnsp->substack, e->minvcnt) > 0))
+					nstate_copy(qvi.newnsp, nsp);
+				else
+					return;
+			}
 			qvi.newnsp->gen = e->gen;
 			cowvec_put(&qvi.newnsp->substack, nstk - 2, arg1);
 			cowvec_put(&qvi.newnsp->substack, nstk - 1, arg2);
 		}
 	} else {
 		QVecInsert qvi = qvec_insert(&e->epsv, k, nsp);
-		if (qvi.newly)
+		if (qvi.newly) {
 			nstate_construct_copy(qvi.newnsp, nsp);
-		else if (int x = nstate_cmp_2(nsp, qvi.newnsp, e->gen, nstk, arg1, arg2); x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &qvi.newnsp->substack, e->minvcnt) > 0))
-			nstate_copy(qvi.newnsp, nsp);
-		else
-			return;
+		} else {
+			int x = nstate_cmp_2(nsp, qvi.newnsp, e->gen, nstk, arg1, arg2);
+			if (x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &qvi.newnsp->substack, e->minvcnt) > 0))
+				nstate_copy(qvi.newnsp, nsp);
+			else
+				return;
+		}
 		qvi.newnsp->gen = e->gen;
 		cowvec_put(&qvi.newnsp->substack, nstk - 2, arg1);
 		cowvec_put(&qvi.newnsp->substack, nstk - 1, arg2);
@@ -2037,16 +2081,19 @@ execute_add_2(Execute *e, QVec *ncsv, NInt k, NInt nstk, const NState *nsp, WCha
 inline static void
 execute_add_3(Execute *e, QVec *ncsv, NInt k, NInt nstk, const NState *nsp, WChar wcnext, NInt arg1, NInt arg2, NInt arg3)
 {
-	const Node &n = e->nodes[k];
-	if (n.type <= Cset) {
-		if (n.type == (NInt) wcnext || (n.type == Cset && cset_test(csets_aref(&e->r->csets, n.args[0]), wcnext))) {
+	const Node *np = &e->nodes[k];
+	if (np->type <= Cset) {
+		if (np->type == (NInt) wcnext || (np->type == Cset && cset_test(csets_aref(&e->r->csets, np->args[0]), wcnext))) {
 			QVecInsert qvi = qvec_insert(ncsv, k, nsp);
-			if (qvi.newly)
+			if (qvi.newly) {
 				nstate_construct_copy(qvi.newnsp, nsp);
-			else if (int x = nstate_cmp_3(nsp, qvi.newnsp, e->gen, nstk, arg1, arg2, arg3); x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &qvi.newnsp->substack, e->minvcnt) > 0))
-				nstate_copy(qvi.newnsp, nsp);
-			else
-				return;
+			} else {
+				int x = nstate_cmp_3(nsp, qvi.newnsp, e->gen, nstk, arg1, arg2, arg3);
+				if (x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &qvi.newnsp->substack, e->minvcnt) > 0))
+					nstate_copy(qvi.newnsp, nsp);
+				else
+					return;
+			}
 			qvi.newnsp->gen = e->gen;
 			cowvec_put(&qvi.newnsp->substack, nstk - 3, arg1);
 			cowvec_put(&qvi.newnsp->substack, nstk - 2, arg2);
@@ -2054,12 +2101,15 @@ execute_add_3(Execute *e, QVec *ncsv, NInt k, NInt nstk, const NState *nsp, WCha
 		}
 	} else {
 		QVecInsert qvi = qvec_insert(&e->epsv, k, nsp);
-		if (qvi.newly)
+		if (qvi.newly) {
 			nstate_construct_copy(qvi.newnsp, nsp);
-		else if (int x = nstate_cmp_3(nsp, qvi.newnsp, e->gen, nstk, arg1, arg2, arg3); x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &qvi.newnsp->substack, e->minvcnt) > 0))
-			nstate_copy(qvi.newnsp, nsp);
-		else
-			return;
+		} else {
+			int x = nstate_cmp_3(nsp, qvi.newnsp, e->gen, nstk, arg1, arg2, arg3);
+			if (x > 0 || (x == 0 && e->minvcnt && cowvec_cmp_from(e->minvoff, &nsp->substack, &qvi.newnsp->substack, e->minvcnt) > 0))
+				nstate_copy(qvi.newnsp, nsp);
+			else
+				return;
+		}
 		qvi.newnsp->gen = e->gen;
 		cowvec_put(&qvi.newnsp->substack, nstk - 3, arg1);
 		cowvec_put(&qvi.newnsp->substack, nstk - 2, arg2);
@@ -2090,9 +2140,9 @@ execute_epsclosure(Execute *e, QVec *ncsv, WChar wcnext)
 		NState *nsp = qvec_lookup(&e->epsv, k);
 		if (cowvec_valid(&e->best) && nsp->boff > cowvec_get(&e->best, e->suboff + 0))
 			continue;
-		const Node &n = e->nodes[k];
-		NInt nstk = n.nstk;
-		switch (n.type) {
+		const Node *np = &e->nodes[k];
+		NInt nstk = np->nstk;
+		switch (np->type) {
 		case Exit:
 			{
 				size_t beg = nsp->boff, end = e->off, mincount = e->r->nmin ? cowvec_get(&nsp->substack, 0) : (size_t) -1;
@@ -2119,20 +2169,20 @@ execute_epsclosure(Execute *e, QVec *ncsv, WChar wcnext)
 			}
 			break;
 		case Goto:
-			execute_add(e, ncsv, k + 1 + n.args[1], nstk, nsp, wcnext);
+			execute_add(e, ncsv, k + 1 + np->args[1], nstk, nsp, wcnext);
 			break;
 		case Join:
 			execute_add(e, ncsv, k + 1, nstk, nsp, wcnext);
 			break;
 		case Loop:
 			execute_add_3(e, ncsv, k + 1, nstk, nsp, wcnext, (NInt) e->off, (NInt) -1, (NInt) e->off);
-			if (n.args[1])
-				execute_add_3(e, ncsv, k + 1 + n.args[0], nstk, nsp, wcnext, (NInt) e->off, (NInt) 0, (NInt) e->off);
+			if (np->args[1])
+				execute_add_3(e, ncsv, k + 1 + np->args[0], nstk, nsp, wcnext, (NInt) e->off, (NInt) 0, (NInt) e->off);
 			break;
 		case MinB:
 			{
-				size_t w = n.args[0] / SizeBits;
-				size_t b = (size_t) 1 << (SizeBits - 1 - n.args[0] % SizeBits);
+				size_t w = np->args[0] / SizeBits;
+				size_t b = (size_t) 1 << (SizeBits - 1 - np->args[0] % SizeBits);
 				NState nscopy;
 				nstate_construct_copy(&nscopy, nsp);
 				b |= -b;
@@ -2153,12 +2203,12 @@ execute_epsclosure(Execute *e, QVec *ncsv, WChar wcnext)
 			{
 				NState nscopy;
 				nstate_construct_copy(&nscopy, nsp);
-				size_t mininc = e->off - cowvec_get(&nscopy.substack, n.nstk);
-				size_t oldlen = (size_t) -1 - cowvec_get(&nscopy.substack, n.args[0]);
-				mininc -= cowvec_get(&nscopy.substack, e->nestoff + n.args[0]);
-				cowvec_put(&nscopy.substack, e->nestoff + n.args[0], 0);
-				cowvec_put(&nscopy.substack, n.args[0], (size_t) -1 - (oldlen + mininc));
-				for (NInt i = n.args[0]; i-- > 0; ) {
+				size_t mininc = e->off - cowvec_get(&nscopy.substack, np->nstk);
+				size_t oldlen = (size_t) -1 - cowvec_get(&nscopy.substack, np->args[0]);
+				mininc -= cowvec_get(&nscopy.substack, e->nestoff + np->args[0]);
+				cowvec_put(&nscopy.substack, e->nestoff + np->args[0], 0);
+				cowvec_put(&nscopy.substack, np->args[0], (size_t) -1 - (oldlen + mininc));
+				for (NInt i = np->args[0]; i-- > 0; ) {
 					oldlen = (size_t) -1 - cowvec_get(&nscopy.substack, i);
 					cowvec_put(&nscopy.substack, i, -1 - (oldlen + mininc));
 					cowvec_put(&nscopy.substack, e->nestoff + i, cowvec_get(&nscopy.substack, e->nestoff + i) + mininc);
@@ -2169,20 +2219,20 @@ execute_epsclosure(Execute *e, QVec *ncsv, WChar wcnext)
 			break;
 		case Next:
 			execute_add(e, ncsv, k + 1, nstk, nsp, wcnext);
-			if (n.args[1] && e->off > cowvec_get(&nsp->substack, nstk + 3 - 1))
-				execute_add_3(e, ncsv, k - n.args[0], nstk + 3, nsp, wcnext, cowvec_get(&nsp->substack, nstk), cowvec_get(&nsp->substack, nstk + 1) - 1, (NInt) e->off);
+			if (np->args[1] && e->off > cowvec_get(&nsp->substack, nstk + 3 - 1))
+				execute_add_3(e, ncsv, k - np->args[0], nstk + 3, nsp, wcnext, cowvec_get(&nsp->substack, nstk), cowvec_get(&nsp->substack, nstk + 1) - 1, (NInt) e->off);
 			break;
 		case Skip:
-			execute_add_2(e, ncsv, k + 1, nstk, nsp, wcnext, (NInt) e->off, (NInt) 1 ^ n.args[1]);
-			execute_add_2(e, ncsv, k + 1 + n.args[0], nstk, nsp, wcnext, (NInt) e->off, (NInt) 0 ^ n.args[1]);
+			execute_add_2(e, ncsv, k + 1, nstk, nsp, wcnext, (NInt) e->off, (NInt) 1 ^ np->args[1]);
+			execute_add_2(e, ncsv, k + 1 + np->args[0], nstk, nsp, wcnext, (NInt) e->off, (NInt) 0 ^ np->args[1]);
 			break;
 		case SubL:
 			{
 				NState nscopy;
 				nstate_construct_copy(&nscopy, nsp);
 				cowvec_put(&nscopy.substack, nstk - 1, e->off);
-				if (n.args[0] != (NInt) -1 && (e->flags & MINRX_REG_NOSUBRESET) == 0)
-					for (NInt i = n.args[0] + 1; i <= n.args[1]; ++i) {
+				if (np->args[0] != (NInt) -1 && (e->flags & MINRX_REG_NOSUBRESET) == 0)
+					for (NInt i = np->args[0] + 1; i <= np->args[1]; ++i) {
 						cowvec_put(&nscopy.substack, e->suboff + i * 2, -1);
 						cowvec_put(&nscopy.substack, e->suboff + i * 2 + 1, -1);
 					}
@@ -2191,11 +2241,11 @@ execute_epsclosure(Execute *e, QVec *ncsv, WChar wcnext)
 			}
 			break;
 		case SubR:
-			if (n.args[0] != (NInt) -1 && ((e->flags & MINRX_REG_FIRSTSUB) == 0 || cowvec_get(&nsp->substack, e->suboff + n.args[0] * 2) == (NInt) -1)) {
+			if (np->args[0] != (NInt) -1 && ((e->flags & MINRX_REG_FIRSTSUB) == 0 || cowvec_get(&nsp->substack, e->suboff + np->args[0] * 2) == (NInt) -1)) {
 				NState nscopy;
 				nstate_construct_copy(&nscopy, nsp);
-				cowvec_put(&nscopy.substack, e->suboff + n.args[0] * 2 + 0, cowvec_get(&nsp->substack, nstk));
-				cowvec_put(&nscopy.substack, e->suboff + n.args[0] * 2 + 1, e->off);
+				cowvec_put(&nscopy.substack, e->suboff + np->args[0] * 2 + 0, cowvec_get(&nsp->substack, nstk));
+				cowvec_put(&nscopy.substack, e->suboff + np->args[0] * 2 + 1, e->off);
 				execute_add(e, ncsv, k + 1, nstk, &nscopy, wcnext);
 				nstate_destruct(&nscopy);
 			} else {
