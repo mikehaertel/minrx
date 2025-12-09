@@ -612,7 +612,7 @@ struct QVecInsert {
 };
 
 static QVecInsert
-qvec_insert(QVec *q, size_t k, const NState *)
+qvec_insert(QVec *q, size_t k, const NState *unused)
 {
 	bool newly = qset_insert(&q->qset, k);
 	// WARNING: if newly inserted then we are returning a reference to uninitialized memory
@@ -854,7 +854,7 @@ cset_test(const CSet *cs, WChar wc)
 }
 
 static bool
-cset_cclass(CSet *cs, minrx_regcomp_flags_t flags, WConv_Encoding, const char *bp, const char *ep)
+cset_cclass(CSet *cs, minrx_regcomp_flags_t flags, WConv_Encoding unused, const char *bp, const char *ep)
 {
 	int result = charset_add_cclass2(cs->charset, bp, ep);
 	if ((flags & MINRX_REG_ICASE) != 0) {
@@ -2310,6 +2310,7 @@ execute(Execute *e, size_t nm, minrx_regmatch_t *rm)
 	nstate_construct(&nsinit, &e->allocator);
 	if ((e->flags & MINRX_REG_NOFIRSTBYTES) == 0 && e->r->firstvalid && !cset_test(&*e->r->firstcset, wcnext)) {
 	zoom:
+		/* empty statement after label */ ;
 		const char *cp = e->wconv.cp, *ep = e->wconv.ep;
 		if (e->r->firstunique != -1) {
 			cp = (const char *) memchr(cp, e->r->firstunique, ep - cp);
@@ -2480,7 +2481,7 @@ minrx_regfree(minrx_regex_t *rx)
 }
 
 size_t
-minrx_regerror(int errcode, const minrx_regex_t *, char *errbuf, size_t errsize)
+minrx_regerror(int errcode, const minrx_regex_t *unused, char *errbuf, size_t errsize)
 {
 	static const char *const messages[] = {
 		N_("success"),
