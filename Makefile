@@ -17,7 +17,7 @@ builds/$(TYPE)/meson-info:
 
 # traditional build (requires only make): make tryit
 CFLAGS=-O3 -Wall
-CXXFLAGS=-std=c++20 -O3 -Wall
+CXXFLAGS=-std=c++17 -O3 -Wall
 rxgrep: charset.o minrx.o rxgrep.o
 	$(CXX) -o $@ $^
 tryit: charset.o minrx.o tryit.o
