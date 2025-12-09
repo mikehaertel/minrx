@@ -59,12 +59,18 @@ Static int charset_add_char(charset_t *set, int32_t wc);
 Static int charset_add_char_ic(charset_t *set, int32_t wc);
 Static int charset_add_range(charset_t *set, int32_t first, int32_t last);
 Static charset_t *charset_invert(charset_t *set, int *errcode);
+#ifndef _MINRX_H
 Static int charset_set_no_newlines(charset_t *set, bool no_newlines);
+#endif
 Static int charset_add_equiv(charset_t *set, int32_t equiv);
+#ifndef _MINRX_H
 Static int charset_add_collate(charset_t *set, const int32_t *collate);
+#endif
 Static int charset_add_cclass(charset_t *set, const char *cclass);
 Static int charset_add_cclass2(charset_t *set, const char *bp, const char *ep);
+#ifndef _MINRX_H
 Static charset_t *charset_copy(charset_t *set, int *errcode);
+#endif
 Static int charset_merge(charset_t *dest, charset_t *src);
 Static bool charset_in_set(const charset_t *set, int32_t the_char);
 Static int charset_free(const charset_t *set);
@@ -74,7 +80,9 @@ typedef struct {
 } charset_firstbytes_t;
 
 Static charset_firstbytes_t charset_firstbytes(charset_t *set, int *errcode);
+#ifndef _MINRX_H
 Static void charset_dump(const charset_t *set, FILE *fp, bool use_c_format);
+#endif
 Static int charset_finalize(charset_t *set);
 
 #ifdef __cplusplus
