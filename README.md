@@ -15,9 +15,7 @@ counterparts.
 
 My goal for MinRX is to eventually have performance competitive with
 the fastest extant matchers, but for now the development focus is on
-correctness and simplicity.  When I am confident that the core algorithm
-is stable and well-tested, I plan to rewrite MinRX in C to improve
-portability and perhaps further reduce resource usage.
+correctness and simplicity.
 
 MinRX attempts to implement the `LC_CTYPE`-dependent locale features
 specified for POSIX regular expressions (with some limitations because
@@ -70,12 +68,10 @@ with just two caveats that I'm aware of:
   no portable POSIX API for looking up the locale information that
   would be needed to implement this syntax.
 
-* The `[= =]` syntax inside bracket expressions for "equivalence classes"
-  uses a semi-portable but horrendously slow and
-  non-standard-conforming algorithm for finding equivalent characters.
-  Each `[= =]` in a pattern likely requires several milliseconds to
-  compile on a modern CPU.  Again, there is no portable POSIX API that
-  offers efficient access to the necessary locale information.
+* POSIX equivalence classes (such as `[[=e=]]`) are supported in Unicode
+  locales via the included `charset` library. In non-Unicode locales,
+  something like `[[=e=]]` is equivalent to `[e]` (which is just
+  equivalent to `e`).
 
 MinRX also provides a few BSD extensions (`\< \>`) and GNU extensions
 (<code>\\\` \\' \b \B \s \S \w \W</code>) that can be optionally enabled
@@ -96,6 +92,22 @@ If you don't have `meson` you can `make rxgrep` and/or `make tryit`
 to build the test programs.
 
 `make clean` removes all build artifacts (both `meson` and traditional).
+
+## Inclusion In Other Programs
+
+To include MinRX into your own program, you will need to copy the four
+files `minrx.h`, `minrx.c`, `charset.h`, and `charset.c`, into your
+source directory. You only need to compile `minrx.c`; `charset.c` is
+compiled into `minrx.o` via `#include "charset.c"`.
+
+If your program is multithreaded, you must make sure that your
+configuration mechanism defines the symbol `HAVE_PTHREADS` since one
+of the routines in the `charset` library makes use of a mutex.  In a
+single-threaded program this is not necessary.
+
+`minrx.c` does a `#include "config.h"` if `HAVE_CONFIG_H` is defined, so you
+can use this as one way to provide configuration preprocessor symbols
+(presumably via Autoconf, but that's up to you).
 
 ## Tools
 
@@ -120,9 +132,7 @@ At some point I will switch focus to performance and portability.
 
 Currently planned work:
 
-* Improve support for POSIX bracket expression collating elements
-  and, if possible, implement POSIX bracket expression equivalence classes
-  in a better way.
+* Improve support for POSIX bracket expression collating elements.
 
 * Possibly a caching-DFA-like optimization: The MinRX SNFA automaton,
   with its stack of arbitrary integers, does not in general correspond
@@ -141,7 +151,7 @@ under its own license, the text of which can be found in that file.
 
 Arnold Robbins pestered me for years to write this matcher, and enthusiastically
 tested numerous early versions of it with GNU `awk`.
-He contributed the manual page and the `rxgrep` program.
+He contributed the charset library, the manual page and the `rxgrep` program.
 
 The `meson` build was contributed by shenleban tongying.
 

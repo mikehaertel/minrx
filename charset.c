@@ -36,7 +36,9 @@
 #include <wctype.h>
 #include <wchar.h>
 #include <locale.h>
+#ifdef HAVE_PTHREADS
 #include <pthread.h>
+#endif
 #include "charset.h"	// for the charset_t typedef
 
 #define INITIAL_ALLOCATION 10
@@ -8642,9 +8644,11 @@ done:
 static int
 wide_char_range_loop(charset_t *set, const char *cclass, wctype_t ctype)
 {
+#ifdef HAVE_PTHREADS
 	static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 	pthread_mutex_lock(& mutex);
+#endif
 
 	int errcode = 0;
 	bool is_new = false;
@@ -8671,7 +8675,9 @@ wide_char_range_loop(charset_t *set, const char *cclass, wctype_t ctype)
 	ret = charset_merge(set, class_set);
 
 done:
+#ifdef HAVE_PTHREADS
 	pthread_mutex_unlock(& mutex);
+#endif
 	return ret;
 }
 /* item_compare_for_searching --- compare two set_items */
