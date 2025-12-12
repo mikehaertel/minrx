@@ -53,6 +53,10 @@
 #endif /* ! HAVE_GETTEXT_H */
 #define N_(msgid) msgid
 
+#ifndef RE_DUP_MAX
+#define RE_DUP_MAX (0x7fff)
+#endif
+
 #include "minrx.h"
 
 // Arnold Robbins' charset library
@@ -66,6 +70,7 @@
 #endif
 
 #ifdef __GNUC__
+#undef inline
 #define inline __attribute__((__always_inline__)) inline
 #endif
 
