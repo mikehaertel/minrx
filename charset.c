@@ -8764,7 +8764,8 @@ charset_finalize(charset_t *set)
 	assert(set != NULL);
 	int result = CSET_SUCCESS;
 
-	qsort(set->chars, set->nchars_inuse, sizeof(int32_t), int32_t_compare);
+	if (set->chars != NULL)
+		qsort(set->chars, set->nchars_inuse, sizeof(int32_t), int32_t_compare);
 	size_t i, j;
 	for (i = 0, j = 1; j < set->nchars_inuse; i++, j++) {
 		if (set->chars[i] == set->chars[j]) {
@@ -8805,7 +8806,8 @@ charset_finalize(charset_t *set)
 	}
 	set->nchars_inuse = total;
 	// sort it
-	qsort(set->items, set->nelems,
+	if (set->items != NULL)
+		qsort(set->items, set->nelems,
 			sizeof(set_item), item_compare_for_sorting);
 	
 	// condense it
@@ -9291,7 +9293,8 @@ charset_merge(charset_t *dest, charset_t *src)
 		if (set->nchars_inuse > 0)
 			memcpy(new_chars, set->chars, set->nchars_inuse * sizeof(int32_t));
 	
-		memcpy(new_chars + set->nchars_inuse, src->chars, src->nchars_inuse * sizeof(int32_t));
+		if (src->chars != NULL)
+			memcpy(new_chars + set->nchars_inuse, src->chars, src->nchars_inuse * sizeof(int32_t));
 		new_chars[new_char_count-1] = L'\0';
 	
 		// now update dest
@@ -9313,7 +9316,8 @@ charset_merge(charset_t *dest, charset_t *src)
 		if (set->nelems > 0)
 			memcpy(new_items, set->items, set->nelems * sizeof(set_item));
 	
-		memcpy(new_items + set->nelems, src->items, src->nelems * sizeof(set_item));
+		if (src->items != NULL)
+			memcpy(new_items + set->nelems, src->items, src->nelems * sizeof(set_item));
 	
 		// now update dest
 		if (set->items != NULL)
