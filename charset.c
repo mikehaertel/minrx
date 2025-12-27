@@ -25,6 +25,12 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+// The tables in this file used for different classifications of
+// characters were created by running C code calling into GLIBC
+// version 2.39.  The Unicode support in that version of GLIBC 
+// is for the Unicode 14.0 standard.  With any luck, the tables
+// will be updated occasionally to newer standards. :-)
+
 #include <assert.h>
 #include <stdio.h>
 #include <stdbool.h>
