@@ -1589,7 +1589,7 @@ chr(Compile *c, bool nested, NInt nstk)
 				return LITERAL(Subexp) {empty(), 0, false, MINRX_REG_ESPACE};
 		}
 		if (c->wc >= INT32_MIN && c->wc <= INT32_MIN + 255) {
-			err = MINRX_REG_BADPAT;		// invalid char seen
+			err = MINRX_REG_BADPAT;		// invalid byte seen
 			goto done;
 		}
 		c->wc = wconv_nextchr(&c->wconv);
