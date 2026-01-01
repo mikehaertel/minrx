@@ -1974,7 +1974,7 @@ inline static void
 execute_add(Execute *e, QVec *ncsv, NInt k, NInt nstk, const NState *nsp, WChar wcnext)
 {
 	const Node *np = &e->nodes[k];
-	if (np->type <= Cset) {
+	if ((WChar) np->type <= Cset) {
 		if (np->type == (NInt) wcnext || (np->type == Cset && cset_test(csets_aref(&e->r->csets, np->args[0]), wcnext))) {
 			QVecInsert qvi = qvec_insert(ncsv, k, nsp);
 			if (qvi.newly) {
@@ -2008,7 +2008,7 @@ inline static void
 execute_add_1(Execute *e, QVec *ncsv, NInt k, NInt nstk, const NState *nsp, WChar wcnext, NInt arg1)
 {
 	const Node *np = &e->nodes[k];
-	if (np->type <= Cset) {
+	if ((WChar) np->type <= Cset) {
 		if (np->type == (NInt) wcnext || (np->type == Cset && cset_test(csets_aref(&e->r->csets, np->args[0]), wcnext))) {
 			QVecInsert qvi = qvec_insert(ncsv, k, nsp);
 			if (qvi.newly) {
@@ -2044,7 +2044,7 @@ inline static void
 execute_add_2(Execute *e, QVec *ncsv, NInt k, NInt nstk, const NState *nsp, WChar wcnext, NInt arg1, NInt arg2)
 {
 	const Node *np = &e->nodes[k];
-	if (np->type <= Cset) {
+	if ((WChar) np->type <= Cset) {
 		if (np->type == (NInt) wcnext || (np->type == Cset && cset_test(csets_aref(&e->r->csets, np->args[0]), wcnext))) {
 			QVecInsert qvi = qvec_insert(ncsv, k, nsp);
 			if (qvi.newly) {
@@ -2082,7 +2082,7 @@ inline static void
 execute_add_3(Execute *e, QVec *ncsv, NInt k, NInt nstk, const NState *nsp, WChar wcnext, NInt arg1, NInt arg2, NInt arg3)
 {
 	const Node *np = &e->nodes[k];
-	if (np->type <= Cset) {
+	if ((WChar) np->type <= Cset) {
 		if (np->type == (NInt) wcnext || (np->type == Cset && cset_test(csets_aref(&e->r->csets, np->args[0]), wcnext))) {
 			QVecInsert qvi = qvec_insert(ncsv, k, nsp);
 			if (qvi.newly) {
