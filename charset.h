@@ -2,7 +2,7 @@
 #define CHARSET_H 1
 
 /*
- * Copyright (C) 2023, 2024, 2025, Arnold David Robbins.
+ * Copyright (C) 2023, 2024, 2025, 2026, Arnold David Robbins.
  * 
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions

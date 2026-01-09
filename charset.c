@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023, 2024, 2025, Arnold David Robbins.
+ * Copyright (C) 2023, 2024, 2025, 2026, Arnold David Robbins.
  * 
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -9033,8 +9033,8 @@ charset_invert(charset_t *set, int *errcode)
 		low = set->items[i].end + 1;
 	}
 	if (low <= MAX_CODE_POINT) {
-			if ((ret = charset_add_range(newset, low, MAX_CODE_POINT)) != CSET_SUCCESS)
-				goto fail;
+		if ((ret = charset_add_range(newset, low, MAX_CODE_POINT)) != CSET_SUCCESS)
+			goto fail;
 	}
 
 done:
