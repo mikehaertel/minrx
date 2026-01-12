@@ -145,8 +145,9 @@ typedef struct COWVec_Storage COWVec_Storage;
 typedef struct COWVec COWVec;
 
 struct COWVec_Allocator {
-	size_t length;
 	COWVec_Storage *freelist;
+	size_t length;
+	jmp_buf errjmp;
 };
 
 struct COWVec_Storage {
@@ -165,8 +166,8 @@ struct COWVec {
 static void
 cowvec_allocator_construct(COWVec_Allocator *a, size_t length)
 {
-	a->length = length;
 	a->freelist = (COWVec_Storage *) NULL;
+	a->length = length;
 }
 
 static void
@@ -206,7 +207,9 @@ cowvec_storage_alloc(COWVec_Allocator *a)
 		r->u.allocator = a;
 		r->refcnt = 1;
 	} else {
-		r = (COWVec_Storage *) malloc(sizeof (COWVec_Storage) + (a->length - 1) * sizeof (size_t));	// FIXME: check malloc returns non-NULL
+		r = (COWVec_Storage *) malloc(sizeof (COWVec_Storage) + (a->length - 1) * sizeof (size_t));
+		if (!r)
+			longjmp(a->errjmp, MINRX_REG_ESPACE);
 		r->u.allocator = a;
 		r->refcnt = 1;
 	}
@@ -234,7 +237,9 @@ cowvec_storage_dealloc(COWVec_Allocator *a, COWVec_Storage *s)
 static void
 cowvec_construct(COWVec *c, COWVec_Allocator *a)
 {
-	c->storage = a ? cowvec_storage_alloc(a) : (COWVec_Storage *) NULL;
+	c->storage = (COWVec_Storage *) NULL;	// ensure *c will be destructable
+	if (a)
+		c->storage = cowvec_storage_alloc(a);
 }
 
 static void
@@ -375,9 +380,9 @@ qset_construct(QSet *q, size_t limit)
 	do
 		t += (limit = s[q->depth++] = (limit + 63u) / 64u);
 	while (limit > 1);
-	uint64_t *next = q->bitsfree = (uint64_t *) malloc(t * sizeof (uint64_t));	// FIXME: check malloc returns non-NULL
+	uint64_t *next = q->bitsfree = (uint64_t *) malloc(t * sizeof (uint64_t));
 	if (!next)
-		return false;
+		return false;	 // note *q will still be safely destructable
 	q->bits[0] = &q->bits0;
 	for (int i = 1; i < q->depth; ++i)
 		q->bits[i] = next, next += s[q->depth - 1 - i];
@@ -388,8 +393,10 @@ qset_construct(QSet *q, size_t limit)
 static void
 qset_destruct(QSet *q)
 {
-	if (q->bitsfree)
+	if (q->bitsfree) {
 		free(q->bitsfree);
+		q->bitsfree = NULL;
+	}
 }
 
 static uint64_t
@@ -576,9 +583,14 @@ struct QVec {
 static bool
 qvec_construct(QVec *q, size_t l)
 {
+	q->storage = NULL;	// ensure *q is destructable
 	if (!qset_construct(&q->qset, l))
 		return false;
-	q->storage = (NState *) malloc(l * sizeof (NState));	// FIXME: check malloc returns non-NULL
+	q->storage = (NState *) malloc(l * sizeof (NState));
+	if (!q->storage) {
+		qset_destruct(&q->qset);
+		return false;
+	}
 	return true;
 }
 
@@ -594,8 +606,11 @@ qvec_clear(QVec *q)
 static void
 qvec_destruct(QVec *q)
 {
-	qvec_clear(q);
-	free((void *) q->storage);
+	if (q->storage) {
+		qvec_clear(q);
+		free((void *) q->storage);
+		q->storage = NULL;
+	}
 	qset_destruct(&q->qset);
 }
 
@@ -808,6 +823,7 @@ struct Compile {
 	jmp_buf errjmp;
 	CSets csets;
 	NodePool *np;
+	CSet *fc;
 	size_t dot;
 	size_t esc_s;
 	size_t esc_S;
@@ -1340,21 +1356,46 @@ alt(Compile *c, bool nested, NInt nstk)
 	if (c->wc == L'|') {
 		for (ListNode *l = lh.nodes.first; l != (ListNode *) NULL; l = l->next)
 			l->node.nstk += 1;
-		Subexp altspace[16], *alts = altspace;
-		size_t alloc = 16, count = 0;
+		enum { NAlt = 4 };	// maximum number of alternatives without requiring unwind-protected malloc
+		Subexp altspace[NAlt], *alts = altspace;
+		size_t count = 0;
 		while (c->wc == L'|') {
-			c->wc = wconv_nextchr(&c->wconv);
-			if (count == alloc) {
-				alloc *= 2;
-				if (alts == altspace) {
-					Subexp *newalts = (Subexp *) malloc(alloc * sizeof (Subexp));	// FIXME: check malloc returns non-NULL
-					memcpy((void *) newalts, (void *) alts, count * sizeof (Subexp));
-					alts = newalts;
-				} else {
-					Subexp *newalts = (Subexp *) realloc((void *) alts, alloc * sizeof (Subexp));	// FIXME: check realloc returns non-NULL
-					alts = newalts;
+			if (count == NAlt) {
+				size_t alloc = NAlt * 2;
+				Subexp *newalts = (Subexp *) malloc(alloc * sizeof (Subexp));
+				if (!newalts)
+					cerr(c, MINRX_REG_ESPACE);
+				alts = newalts;
+				memcpy((void *) alts, (void *) altspace, NAlt * sizeof (Subexp));
+				Subexp *volatile altalloc = newalts;
+				int err;
+				jmp_buf errjmp;
+				memcpy(&errjmp, &c->errjmp, sizeof errjmp);
+				if ((err = setjmp(c->errjmp)) != 0) {
+				escape:
+					free((void *) altalloc);
+					memcpy(&c->errjmp, &errjmp, sizeof errjmp);
+					cerr(c, err);
 				}
+				for (;;) {
+					c->wc = wconv_nextchr(&c->wconv);
+					alts[count++] = cat(c, nested, nstk + 1);
+					if (c->wc != L'|')
+						break;
+					if (count == alloc) {
+						alloc *= 2;
+						newalts = (Subexp *) realloc(alts, alloc * sizeof (Subexp));
+						if (!newalts) {
+							err = MINRX_REG_ESPACE;
+							goto escape;
+						}
+						altalloc = alts = newalts;
+					}
+				}
+				memcpy(&c->errjmp, &errjmp, sizeof errjmp);
+				break;
 			}
+			c->wc = wconv_nextchr(&c->wconv);
 			alts[count++] = cat(c, nested, nstk + 1);
 		}
 		Subexp rh = alts[count - 1];
@@ -1757,16 +1798,14 @@ firstclosure(Compile *c, const Node *nodes, NInt nnode)
 	if (nnode == 0)
 		return (CSet *) NULL;
 	QSet epsq, epsv, firsts;
-	if (!qset_construct(&epsq, nnode))
-		return (CSet *) NULL;
-	if (!qset_construct(&epsv, nnode)) {
+	if (!qset_construct(&epsq, nnode) || !qset_construct(&epsv, nnode)) {
 		qset_destruct(&epsq);
-		return (CSet *) NULL;
+		cerr(c, MINRX_REG_ESPACE);
 	}
 	if (!qset_construct(&firsts, nnode)) {
 		qset_destruct(&epsq);
 		qset_destruct(&epsv);
-		return (CSet *) NULL;
+		cerr(c, MINRX_REG_ESPACE);
 	}
 	qset_insert(&epsq, 0);
 	do {
@@ -1804,9 +1843,8 @@ firstclosure(Compile *c, const Node *nodes, NInt nnode)
 				break;
 			}
 	} while (!qset_empty(&epsq));
-	CSet *cs = (CSet *) malloc(sizeof (CSet));
+	CSet *cs = c->fc = (CSet *) malloc(sizeof (CSet));
 	if (cs) {
-		// FIXME: cs leaks if any of the cset_*() operations exit via longjmp
 		cset_construct(c, cs, c->enc);
 		while (!qset_empty(&firsts)) {
 			NInt k = qset_remove(&firsts);
@@ -1820,6 +1858,8 @@ firstclosure(Compile *c, const Node *nodes, NInt nnode)
 	qset_destruct(&firsts);
 	qset_destruct(&epsv);
 	qset_destruct(&epsq);
+	if (!cs)
+		cerr(c, MINRX_REG_ESPACE);
 	return cs;
 }
 
@@ -1859,6 +1899,10 @@ compile(Compile *c)
 			free((void *) p);
 		}
 		csets_clear(&c->csets);
+		if (c->fc) {
+			cset_destruct(c->fc);
+			free((void *) c->fc);
+		}
 		r->err = err;
 		return vr;
 	}
@@ -1938,9 +1982,10 @@ execute_construct(Execute *e, const Regexp *r, minrx_regexec_flags_t flags, cons
 	cowvec_allocator_construct(&e->allocator, e->nestoff + r->nmin);
 	cowvec_construct(&e->best, (COWVec_Allocator *) NULL);
 	e->bestmincount = 0;
-	if (!qset_construct(&e->epsq, r->nnode))
+	if (!qset_construct(&e->epsq, r->nnode) || !qvec_construct(&e->epsv, r->nnode)) {
+		qset_destruct(&e->epsq);
 		return false;
-	qvec_construct(&e->epsv, r->nnode);
+	}
 	return true;
 }
 
@@ -2282,15 +2327,25 @@ static int
 execute(Execute *e, size_t nm, minrx_regmatch_t *rm)
 {
 	QVec mcsvs[2];
-	qvec_construct(&mcsvs[0], e->r->nnode);
-	qvec_construct(&mcsvs[1], e->r->nnode);
+	if (!qvec_construct(&mcsvs[0], e->r->nnode) || !qvec_construct(&mcsvs[1], e->r->nnode)) {
+		qvec_destruct(&mcsvs[0]);
+		return MINRX_REG_ESPACE;
+	}
+	NState nsinit;
+	nstate_construct(&nsinit, (COWVec_Allocator *) NULL);	// fake construction so "exception handler" will be safe
+	int err;
+	if ((err = setjmp(e->allocator.errjmp)) != 0) {
+		nstate_destruct(&nsinit);
+		qvec_destruct(&mcsvs[1]);
+		qvec_destruct(&mcsvs[0]);
+		return err;
+	}
+	nstate_construct(&nsinit, &e->allocator);		// real construction
 	e->off = wconv_off(&e->wconv);
 	WChar wcnext = wconv_nextchr(&e->wconv);
 	if ((e->flags & MINRX_REG_RESUME) != 0 && rm && rm[0].rm_eo > 0)
 		while (wcnext != End && (ptrdiff_t) e->off < rm[0].rm_eo)
 			e->wcprev = wcnext, e->off = wconv_off(&e->wconv), wcnext = wconv_nextchr(&e->wconv);
-	NState nsinit;
-	nstate_construct(&nsinit, &e->allocator);
 	if ((e->flags & MINRX_REG_NOFIRSTBYTES) == 0 && e->r->firstvalid && !cset_test(&*e->r->firstcset, wcnext)) {
 	zoom:
 		/* empty statement after label */ ;
@@ -2429,7 +2484,10 @@ minrx_regncomp(minrx_regex_t *rx, size_t ns, const char *s, int flags)
 	c.nmin = 0;
 	c.nsub = 0;
 	c.np = (NodePool *) NULL;
+	c.fc = (CSet *) NULL;
 	Regexp *r = compile(&c);
+	if (!r)
+		return MINRX_REG_ESPACE;
 	rx->re_regexp = r;
 	rx->re_nsub = r->nsub - 1;
 	rx->re_compflags = (minrx_regcomp_flags_t) flags;
@@ -2441,7 +2499,8 @@ minrx_regnexec(minrx_regex_t *rx, size_t ns, const char *s, size_t nm, minrx_reg
 {
 	Regexp *r = (Regexp *) rx->re_regexp;
 	Execute e;
-	execute_construct(&e, r, (minrx_regexec_flags_t) flags, s, s + ns);
+	if (!execute_construct(&e, r, (minrx_regexec_flags_t) flags, s, s + ns))
+		return MINRX_REG_ESPACE;
 	int ret = execute(&e, nm, rm);
 	execute_destruct(&e);
 	return ret;
