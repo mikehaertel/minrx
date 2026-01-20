@@ -1488,7 +1488,7 @@ mkrep_braces(Compile *c, Subexp lh, NInt m, NInt n, NInt nstk)
 	if ((m != (NInt) -1 && m > RE_DUP_MAX) || (n != (NInt) -1 && n > RE_DUP_MAX) || m > n)
 		cerr(c, MINRX_REG_BADBR);
 	if (n == 0)
-		return LITERAL(Subexp) {{}, 0, false};
+		return LITERAL(Subexp) {{NULL, NULL, 0}, 0, false};
 	if (m == 0 && n == 1)
 		return mkrep(c, lh, true, false, nstk);
 	if (m == 0 && n == (NInt) -1)
