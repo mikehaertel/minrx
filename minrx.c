@@ -1919,7 +1919,7 @@ compile(Compile *c)
 			cset_destruct(c->fc);
 			free((void *) c->fc);
 		}
-		r->err = err;
+		r->err = (minrx_result_t) err;
 		return vr;
 	}
 	Node *nodes = (Node *) NULL;
