@@ -47,12 +47,11 @@
 #if defined(GAWK) && defined(__MINGW32__)
 #include "nonposix.h"
 #else	/* ! (GAWK && __MINGW32__) */
-#if defined(HAVE_UCHAR_H) && defined(HAVE_MBRTOC32) && defined(HAVE_C32RTOMB)
+#if defined(HAVE_UCHAR_H) && defined(HAVE_MBRTOC32)
 #include <uchar.h>
 #else
 #define char32_t wchar_t
 #define mbrtoc32 mbrtowc
-#define c32rtomb wcrtobm
 #endif
 #endif
 
