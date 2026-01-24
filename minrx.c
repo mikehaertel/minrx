@@ -44,6 +44,17 @@
 #include "config.h"
 #endif /* HAVE_CONFIG_H */
 
+#if defined(GAWK) && defined(__MINGW32__)
+#include "nonposix.h"
+#else	/* ! (GAWK && __MINGW32__) */
+#if defined(HAVE_UCHAR_H) && defined(HAVE_MBRTOC32)
+#include <uchar.h>
+#else
+#define char32_t wchar_t
+#define mbrtoc32 mbrtowc
+#endif
+#endif
+
 // GNU gettext
 #ifdef HAVE_GETTEXT_H
 #include <gettext.h>
@@ -685,9 +696,9 @@ wconv_nextbyte(WConv *wc)
 static WChar
 wconv_nextmbtowc(WConv *wc)
 {
-	wchar_t wct = L'\0';
+	char32_t wct = L'\0';
 	if (wc->cp != wc->ep) {
-		size_t n = mbrtowc(&wct, wc->cp, wc->ep - wc->cp, &wc->mbs);
+		size_t n = mbrtoc32(&wct, wc->cp, wc->ep - wc->cp, &wc->mbs);
 		if (n == 0 || n == (size_t) -1 || n == (size_t) -2) {
 			if (wct == L'\0')
 				wct = INT32_MIN + (unsigned char) *wc->cp++;
@@ -1617,7 +1628,7 @@ static Subexp
 chr(Compile *c, bool nested, NInt nstk)
 {
 	NodeList lhs = nodelist_empty();
-	size_t lhmaxstk;
+	size_t lhmaxstk = 0;	// init to avoid compiler warnings.
 	bool lhasmin = false;
 	switch (c->wc) {
 	default:
