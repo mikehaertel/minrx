@@ -54,7 +54,7 @@
 #define N_(msgid) msgid
 
 #ifndef RE_DUP_MAX
-#define RE_DUP_MAX (0x7fff)
+#define RE_DUP_MAX 32767
 #endif
 
 #include "minrx.h"
