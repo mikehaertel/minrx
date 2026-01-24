@@ -1323,7 +1323,7 @@ satmul(NInt x, NInt y)
 static bool
 num(Compile *c, NInt *np, WChar *wcp)
 {
-	if (*wcp < L'0' || *wcp > L'9')
+	if (! IsDigit(*wcp))
 		return false;
 	NInt v = 0;
 	do {
@@ -1331,12 +1331,12 @@ num(Compile *c, NInt *np, WChar *wcp)
 		if (v == (NInt) -1 || (v += *wcp - L'0') < (NInt) *wcp - L'0') {
 			do
 				*wcp = wconv_nextchr(&c->wconv);
-			while (*wcp >= L'0' && *wcp <= L'9');
+			while (IsDigit(*wcp));
 			*np = -1;
 			return true;
 		}
 		*wcp = wconv_nextchr(&c->wconv);
-	} while (*wcp >= L'0' && *wcp <= L'9');
+	} while (IsDigit(*wcp));
 	*np = v;
 	return true;
 }

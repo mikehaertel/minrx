@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023, 2024, 2025, Arnold David Robbins.
+ * Copyright (C) 2023, 2024, 2025, 2026, Arnold David Robbins.
  * 
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -25,6 +25,12 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+// The tables in this file used for different classifications of
+// characters were created by running C code calling into GLIBC
+// version 2.39.  The Unicode support in that version of GLIBC 
+// is for the Unicode 14.0 standard.  With any luck, the tables
+// will be updated occasionally to newer standards. :-)
+
 #include <assert.h>
 #include <stdio.h>
 #include <stdbool.h>
@@ -36,7 +42,9 @@
 #include <wctype.h>
 #include <wchar.h>
 #include <locale.h>
+#ifdef HAVE_PTHREADS
 #include <pthread.h>
+#endif
 #include "charset.h"	// for the charset_t typedef
 
 #define INITIAL_ALLOCATION 10
@@ -3388,7 +3396,7 @@ static struct _class_cache {
 	charset_t *set;
 	struct _class_cache *next;	// linked list
 } *class_cache[53];
-static struct equiv {
+static const struct equiv {
 	int32_t		the_char;
 	int			count;
 	int32_t		equivs[200];
@@ -3821,7 +3829,7 @@ static struct equiv {
 	{ 0x2f81c, 17, { 0x2f88f, 0x2f9e0, 0x2f9e1, 0x2f9e5, 0x2f9ed, 0x2f9f1, 0x2f9f6, 0x2f9f7, 0x2f9fb, 0x2f9fd, 0x2fa01, 0x2fa09, 0x2fa10, 0x2fa12, 0x2fa13, 0x2fa14, 0x2fa1d, } },
 };
 
-static struct ref {
+static const struct ref {
 	int32_t		the_char;
 	int32_t		key_char;
 } ref_table[] = {
@@ -8642,9 +8650,11 @@ done:
 static int
 wide_char_range_loop(charset_t *set, const char *cclass, wctype_t ctype)
 {
+#ifdef HAVE_PTHREADS
 	static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 	pthread_mutex_lock(& mutex);
+#endif
 
 	int errcode = 0;
 	bool is_new = false;
@@ -8671,7 +8681,9 @@ wide_char_range_loop(charset_t *set, const char *cclass, wctype_t ctype)
 	ret = charset_merge(set, class_set);
 
 done:
+#ifdef HAVE_PTHREADS
 	pthread_mutex_unlock(& mutex);
+#endif
 	return ret;
 }
 /* item_compare_for_searching --- compare two set_items */
@@ -8758,7 +8770,8 @@ charset_finalize(charset_t *set)
 	assert(set != NULL);
 	int result = CSET_SUCCESS;
 
-	qsort(set->chars, set->nchars_inuse, sizeof(int32_t), int32_t_compare);
+	if (set->chars != NULL)
+		qsort(set->chars, set->nchars_inuse, sizeof(int32_t), int32_t_compare);
 	size_t i, j;
 	for (i = 0, j = 1; j < set->nchars_inuse; i++, j++) {
 		if (set->chars[i] == set->chars[j]) {
@@ -8799,7 +8812,8 @@ charset_finalize(charset_t *set)
 	}
 	set->nchars_inuse = total;
 	// sort it
-	qsort(set->items, set->nelems,
+	if (set->items != NULL)
+		qsort(set->items, set->nelems,
 			sizeof(set_item), item_compare_for_sorting);
 	
 	// condense it
@@ -9019,8 +9033,8 @@ charset_invert(charset_t *set, int *errcode)
 		low = set->items[i].end + 1;
 	}
 	if (low <= MAX_CODE_POINT) {
-			if ((ret = charset_add_range(newset, low, MAX_CODE_POINT)) != CSET_SUCCESS)
-				goto fail;
+		if ((ret = charset_add_range(newset, low, MAX_CODE_POINT)) != CSET_SUCCESS)
+			goto fail;
 	}
 
 done:
@@ -9031,6 +9045,7 @@ fail:
 	charset_free(newset);
 	return NULL;
 }
+#ifndef _MINRX_H
 /* charset_set_no_newline --- set the value of the "no newlines" flag */
 
 Static int
@@ -9044,6 +9059,7 @@ charset_set_no_newlines(charset_t *set, bool no_newlines)
 	set->no_newlines = no_newlines;
 	return CSET_SUCCESS;
 }
+#endif
 /* charset_add_equiv --- add an equivalence class */
 
 Static int
@@ -9101,6 +9117,7 @@ charset_add_equiv(charset_t *set, int32_t equiv)
 
 	return CSET_SUCCESS;
 }
+#ifndef _MINRX_H
 /* charset_add_collate --- add a collating sequence */
 
 Static int
@@ -9118,6 +9135,7 @@ charset_add_collate(charset_t *set, const int32_t *collate)
 
 	return charset_add_char(set, collate[0]);
 }
+#endif
 /* charset_add_cclass --- add a character class, like "alnum" */
 
 Static int
@@ -9212,6 +9230,7 @@ charset_add_cclass2(charset_t *set, const char *bp, const char *ep)
 
 #undef ARBITRARY_LIMIT
 }
+#ifndef _MINRX_H
 /* charset_copy --- create a new charset that is copy of the original */
 
 Static charset_t *
@@ -9253,6 +9272,7 @@ charset_copy(charset_t *set, int *errcode)
 	*errcode = CSET_SUCCESS;
 	return newset;
 }
+#endif
 Static int
 charset_merge(charset_t *dest, charset_t *src)
 {
@@ -9279,7 +9299,8 @@ charset_merge(charset_t *dest, charset_t *src)
 		if (set->nchars_inuse > 0)
 			memcpy(new_chars, set->chars, set->nchars_inuse * sizeof(int32_t));
 	
-		memcpy(new_chars + set->nchars_inuse, src->chars, src->nchars_inuse * sizeof(int32_t));
+		if (src->chars != NULL)
+			memcpy(new_chars + set->nchars_inuse, src->chars, src->nchars_inuse * sizeof(int32_t));
 		new_chars[new_char_count-1] = L'\0';
 	
 		// now update dest
@@ -9301,7 +9322,8 @@ charset_merge(charset_t *dest, charset_t *src)
 		if (set->nelems > 0)
 			memcpy(new_items, set->items, set->nelems * sizeof(set_item));
 	
-		memcpy(new_items + set->nelems, src->items, src->nelems * sizeof(set_item));
+		if (src->items != NULL)
+			memcpy(new_items + set->nelems, src->items, src->nelems * sizeof(set_item));
 	
 		// now update dest
 		if (set->items != NULL)
@@ -9407,6 +9429,7 @@ charset_firstbytes(charset_t *set, int *errcode)
 done:
 	return result;
 }
+#ifndef _MINRX_H
 /* charset_dump --- dump out the data structures */
 
 Static void
@@ -9430,9 +9453,9 @@ charset_dump(const charset_t *set, FILE *fp, bool use_c_format)
 		fprintf(fp, "finalized = %s\n", boolval[!! set->finalized]);
 		fprintf(fp, "is_utf8 = %s\n", boolval[!! set->is_utf8]);
 		fprintf(fp, "mb_cur_max = %d\n", set->mb_cur_max);
-		fprintf(fp, "nchars_inuse = %zd\n", set->nchars_inuse);
-		fprintf(fp, "nelems = %zd\n", set->nelems);
-		fprintf(fp, "nelems8bit = %zd\n", set->nelems8bit);
+		fprintf(fp, "nchars_inuse = %zu\n", set->nchars_inuse);
+		fprintf(fp, "nelems = %zu\n", set->nelems);
+		fprintf(fp, "nelems8bit = %zu\n", set->nelems8bit);
 		
 		for (size_t i = 0; i < set->nelems; i++) {
 			fprintf(fp, "%3zd. RANGE: start = L'%lc' (%d), end = L'%lc' (%d)\n",
@@ -9441,3 +9464,4 @@ charset_dump(const charset_t *set, FILE *fp, bool use_c_format)
 	}
 	fflush(fp);
 }
+#endif
