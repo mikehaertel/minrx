@@ -1318,13 +1318,13 @@ struct Regexp {
 	CSets csets;
 	const Node *nodes;
 	size_t nnode;
+	size_t nmin;
+	size_t nstk;
+	size_t nsub;
 	CSet *firstcset;
 	bool firstvalid;
 	FirstBytes firstbytes;
 	int32_t firstunique;
-	size_t nmin;
-	size_t nstk;
-	size_t nsub;
 };
 
 static NInt
@@ -1900,13 +1900,13 @@ compile(Compile *c)
 	csets_construct(&r->csets);
 	r->nodes = NULL;
 	r->nnode = 0;
+	r->nmin = 0;
+	r->nstk = 0;
+	r->nsub = 0;
 	r->firstcset = NULL;
 	r->firstvalid = false;
 	memset(&r->firstbytes, 0, sizeof r->firstbytes);
 	r->firstunique = -1;
-	r->nmin = 0;
-	r->nstk = 0;
-	r->nsub = 0;
 	int err;
 	if ((err = setjmp(c->errjmp)) != 0) {
 		c = vc, r = vr;
@@ -1942,20 +1942,14 @@ compile(Compile *c)
 		free((void *) p);
 	}
 	c->np = (NodePool *) NULL;
-	CSet *fc = firstclosure(c, nodes, nnode);		// FIXME: check for allocation errors
-	FirstBytes fb;
-	int32_t fu = -1;
-	bool fv = firstbytes(c, &fb, &fu, c->enc, fc);
 	r->csets = c->csets;
 	r->nodes = nodes;
 	r->nnode = nnode;
-	r->firstcset = fc;
-	r->firstvalid = fv;
-	r->firstbytes = fb;
-	r->firstunique = fu;
 	r->nmin = c->nmin;
 	r->nstk = lh.maxstk;
 	r->nsub = c->nsub + 1;
+	r->firstcset = firstclosure(c, nodes, nnode);
+	r->firstvalid = firstbytes(c, &r->firstbytes, &r->firstunique, c->enc, r->firstcset);
 	return r;
 }
 
