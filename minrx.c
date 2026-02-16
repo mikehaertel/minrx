@@ -775,9 +775,9 @@ wconv_caseflip_wchar(WChar wc)
 {
 	if (wc == End)
 		return wc;
-	if (iswlower((unsigned char) wc))
+	if (iswlower(wc))
 		return towupper(wc);
-	if (iswupper((unsigned char) wc))
+	if (iswupper(wc))
 		return towlower(wc);
 	return wc;
 }
