@@ -8914,6 +8914,7 @@ charset_add_char(charset_t *set, int32_t wc)
 }
 /* charset_add_char_ic --- add a single wide character to the set, and its case alternatives */
 
+#if 0
 Static int
 charset_add_char_ic(charset_t *set, int32_t wc)
 {
@@ -8946,6 +8947,7 @@ charset_add_char_ic(charset_t *set, int32_t wc)
 
 	return result1;
 }
+#endif
 /* charset_add_range --- add a range item */
 
 Static int
