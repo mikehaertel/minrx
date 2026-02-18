@@ -8787,8 +8787,7 @@ charset_finalize(charset_t *set)
 	}
 	if (set->chars != NULL)
 		set->chars[set->nchars_inuse] = L'\0';	// not strictly necessary, but doesn't hurt
-	size_t range_start, total;
-	range_start = total = 0;
+	size_t range_start = 0;
 	for (i = 0, j = 1; j < set->nchars_inuse; i++, j++) {
 		if (set->chars[j] == set->chars[i] + 1) {	// ab...
 			continue;
@@ -8798,7 +8797,6 @@ charset_finalize(charset_t *set)
 			result = charset_add_range(set, set->chars[range_start], set->chars[i]);
 			if (result != CSET_SUCCESS)
 				return result;
-			total++;
 			range_start = j;
 		}
 	}
@@ -8808,9 +8806,7 @@ charset_finalize(charset_t *set)
 					set->chars[set->nchars_inuse-1]);
 		if (result != CSET_SUCCESS)
 			return result;
-		total++;
 	}
-	set->nchars_inuse = total;
 	// sort it
 	if (set->items != NULL)
 		qsort(set->items, set->nelems,
@@ -8914,7 +8910,8 @@ charset_add_char(charset_t *set, int32_t wc)
 }
 /* charset_add_char_ic --- add a single wide character to the set, and its case alternatives */
 
-#if 0
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 Static int
 charset_add_char_ic(charset_t *set, int32_t wc)
 {
@@ -8947,7 +8944,7 @@ charset_add_char_ic(charset_t *set, int32_t wc)
 
 	return result1;
 }
-#endif
+#pragma GCC diagnostic pop
 /* charset_add_range --- add a range item */
 
 Static int
@@ -9047,7 +9044,8 @@ fail:
 	charset_free(newset);
 	return NULL;
 }
-#ifndef _MINRX_H
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 /* charset_set_no_newline --- set the value of the "no newlines" flag */
 
 Static int
@@ -9061,7 +9059,7 @@ charset_set_no_newlines(charset_t *set, bool no_newlines)
 	set->no_newlines = no_newlines;
 	return CSET_SUCCESS;
 }
-#endif
+#pragma GCC diagnostic pop
 /* charset_add_equiv --- add an equivalence class */
 
 Static int
@@ -9119,7 +9117,8 @@ charset_add_equiv(charset_t *set, int32_t equiv)
 
 	return CSET_SUCCESS;
 }
-#ifndef _MINRX_H
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 /* charset_add_collate --- add a collating sequence */
 
 Static int
@@ -9137,7 +9136,7 @@ charset_add_collate(charset_t *set, const int32_t *collate)
 
 	return charset_add_char(set, collate[0]);
 }
-#endif
+#pragma GCC diagnostic pop
 /* charset_add_cclass --- add a character class, like "alnum" */
 
 Static int
@@ -9232,7 +9231,8 @@ charset_add_cclass2(charset_t *set, const char *bp, const char *ep)
 
 #undef ARBITRARY_LIMIT
 }
-#ifndef _MINRX_H
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 /* charset_copy --- create a new charset that is copy of the original */
 
 Static charset_t *
@@ -9274,7 +9274,7 @@ charset_copy(charset_t *set, int *errcode)
 	*errcode = CSET_SUCCESS;
 	return newset;
 }
-#endif
+#pragma GCC diagnostic pop
 Static int
 charset_merge(charset_t *dest, charset_t *src)
 {
@@ -9431,7 +9431,8 @@ charset_firstbytes(charset_t *set, int *errcode)
 done:
 	return result;
 }
-#ifndef _MINRX_H
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 /* charset_dump --- dump out the data structures */
 
 Static void
@@ -9466,4 +9467,4 @@ charset_dump(const charset_t *set, FILE *fp, bool use_c_format)
 	}
 	fflush(fp);
 }
-#endif
+#pragma GCC diagnostic pop
