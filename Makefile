@@ -16,7 +16,7 @@ builds/$(TYPE)/meson-info:
 	meson setup builds/$(TYPE) --prefix=$(PREFIX) --buildtype=$(TYPE)
 
 # traditional build (requires only make): make tryit
-CFLAGS=-O3 -Wall
+CFLAGS=-O3 -Wall -D_POSIX_C_SOURCE=200809L
 rxgrep: charset.o minrx.o rxgrep.o
 	$(CC) -o $@ $^
 tryit: charset.o minrx.o tryit.o
