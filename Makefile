@@ -17,12 +17,10 @@ builds/$(TYPE)/meson-info:
 
 # traditional build (requires only make): make tryit
 CFLAGS=-O3 -Wall -D_POSIX_C_SOURCE=200809L
-CXXFLAGS=-std=c++20 -O3 -Wall -D_POSIX_C_SOURCE=200809L
-
-rxgrep: minrx.o rxgrep.o
-	$(CXX) -o $@ $^
-tryit: minrx.o tryit.o
-	$(CXX) -o $@ $^
+rxgrep: charset.o minrx.o rxgrep.o
+	$(CC) -o $@ $^
+tryit: charset.o minrx.o tryit.o
+	$(CC) -o $@ $^
 
 # removes both default and traditional build artifacts
 .PHONY: clean
