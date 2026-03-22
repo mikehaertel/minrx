@@ -874,7 +874,7 @@ static void
 cset_construct(Compile *c, CSet *cs, WConv_Encoding enc)
 {
 	int err = CSET_SUCCESS;
-	cs->charset = charset_create(&err, enc == Byte, enc == UTF8);
+	cs->charset = charset_create(&err, MB_CUR_MAX, enc == UTF8);
 	if (!cs->charset)
 		cserr(c, err);
 }
