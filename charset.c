@@ -8910,8 +8910,6 @@ charset_add_char(charset_t *set, int32_t wc)
 }
 /* charset_add_char_ic --- add a single wide character to the set, and its case alternatives */
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-function"
 Static int
 charset_add_char_ic(charset_t *set, int32_t wc)
 {
@@ -8944,7 +8942,8 @@ charset_add_char_ic(charset_t *set, int32_t wc)
 
 	return result1;
 }
-#pragma GCC diagnostic pop
+
+
 /* charset_add_range --- add a range item */
 
 Static int
