@@ -57,7 +57,7 @@ struct _charset {
 	bool     no_newlines;       // If \n can't be in the set
 	bool     finalized;         // No more changes possible
 	bool	 is_utf8;			// True if using a UTF-8 character set
-	int		 mb_cur_max;		// Value of MB_CUR_MAX when the charset was created
+	bool	 locale_is_8bit;	// Use isalpha() etc. instead of iswalpha() etc.
 	size_t   nchars_inuse;      // Number of characters used
 	size_t   nchars_allocated;  // Number of characters allocated
 	int32_t  *chars;            // Characters added to the set
@@ -8604,7 +8604,7 @@ find_class_in_cache(charset_t *set, const char *cclass, int *errcode, bool *is_n
 		}
 		pcache->name = buf;
 		pcache->next = NULL;
-		charset_t *newset = charset_create(errcode, set->mb_cur_max, set->is_utf8);
+		charset_t *newset = charset_create(errcode, set->locale_is_8bit, set->is_utf8);
 		if (newset == NULL) {
 			// *errcode already set
 			free((void *) pcache->name);
@@ -8629,7 +8629,7 @@ find_class_in_cache(charset_t *set, const char *cclass, int *errcode, bool *is_n
 		}
 		pcache->name = buf;
 		pcache->next = NULL;
-		charset_t *newset = charset_create(errcode, set->mb_cur_max, set->is_utf8);
+		charset_t *newset = charset_create(errcode, set->locale_is_8bit, set->is_utf8);
 		if (newset == NULL) {
 			// *errcode already set
 			free((void *) pcache->name);
@@ -8853,7 +8853,7 @@ charset_finalize(charset_t *set)
 /* charset_create --- make a new charset_t and initialize it */
 
 Static charset_t *
-charset_create(int *errcode, int mb_cur_max, bool is_utf8)
+charset_create(int *errcode, bool locale_is_8bit, bool is_utf8)
 {
 	if (errcode == NULL)
 		return NULL;
@@ -8865,7 +8865,7 @@ charset_create(int *errcode, int mb_cur_max, bool is_utf8)
 	}
 
 	memset(set, 0, sizeof(charset_t));
-	set->mb_cur_max = mb_cur_max;
+	set->locale_is_8bit = locale_is_8bit;
 	set->is_utf8 = is_utf8;
 
 	*errcode = CSET_SUCCESS;
@@ -8927,8 +8927,8 @@ charset_add_char_ic(charset_t *set, int32_t wc)
 		int result2, result3;
 		result2 = result3 = CSET_SUCCESS;
 
-		int32_t wcl = set->mb_cur_max == 1 ? tolower(wc) : (int32_t) towlower(wc);
-		int32_t wcu = set->mb_cur_max == 1 ? toupper(wc) : (int32_t) towupper(wc);
+		int32_t wcl = set->locale_is_8bit == 1 ? tolower(wc) : (int32_t) towlower(wc);
+		int32_t wcu = set->locale_is_8bit == 1 ? toupper(wc) : (int32_t) towupper(wc);
 
 		if (wc != wcl || wc != wcu) {
 			result2 = charset_add_char(set, wcl);
@@ -8942,8 +8942,6 @@ charset_add_char_ic(charset_t *set, int32_t wc)
 
 	return result1;
 }
-
-
 /* charset_add_range --- add a range item */
 
 Static int
@@ -9007,7 +9005,7 @@ charset_invert(charset_t *set, int *errcode)
 		}
 	}
 
-	charset_t *newset = charset_create(errcode, set->mb_cur_max, set->is_utf8);
+	charset_t *newset = charset_create(errcode, set->locale_is_8bit, set->is_utf8);
 	if (newset == NULL)	// *errcode is already set
 		return NULL;
 
@@ -9074,7 +9072,7 @@ charset_add_equiv(charset_t *set, int32_t equiv)
 
 	int result;
 
-	if (set->mb_cur_max == 1 || ! set->is_utf8) {
+	if (! set->is_utf8) {
 		result = charset_add_char(set, equiv);
 		return result;
 	}
@@ -9151,7 +9149,7 @@ charset_add_cclass(charset_t *set, const char *cclass)
 	int index = find_class(cclass);
 
 	if (index == -1) {
-		if (set->mb_cur_max == 1)
+		if (set->locale_is_8bit)	// an 8-bit locale
 			return CSET_ECTYPE;
 		else {
 			// maybe it's locale-specific
@@ -9165,7 +9163,7 @@ charset_add_cclass(charset_t *set, const char *cclass)
 	}
 
 	// we have a standard cclass
-	if (set->mb_cur_max == 1) {
+	if (set->locale_is_8bit) {
 		int (*charcheckfunc)(int c) = class_data[index].charcheckfunc;
 		for (int32_t i = 0; i < 256; i++) {
 			if (charcheckfunc(i)) {
@@ -9244,7 +9242,7 @@ charset_copy(charset_t *set, int *errcode)
 		return NULL;
 	}
 
-	charset_t *newset = charset_create(errcode, set->mb_cur_max, set->is_utf8);
+	charset_t *newset = charset_create(errcode, set->locale_is_8bit, set->is_utf8);
 	if (newset == NULL)
 		return NULL;
 
@@ -9405,7 +9403,7 @@ charset_firstbytes(charset_t *set, int *errcode)
 	}
 #define min(x, y) ((x) < (y) ? (x) : (y))
 
-	if (set->mb_cur_max == 1) {
+	if (set->locale_is_8bit) {
 		for (size_t i = 0; i < set->nelems; i++) {
 			if (set->items[i].start > 255)
 				break;
@@ -9454,7 +9452,7 @@ charset_dump(const charset_t *set, FILE *fp, bool use_c_format)
 		fprintf(fp, "no_newlines = %s\n", boolval[!! set->no_newlines]);
 		fprintf(fp, "finalized = %s\n", boolval[!! set->finalized]);
 		fprintf(fp, "is_utf8 = %s\n", boolval[!! set->is_utf8]);
-		fprintf(fp, "mb_cur_max = %d\n", set->mb_cur_max);
+		fprintf(fp, "locale_is_8bit = %d\n", set->locale_is_8bit);
 		fprintf(fp, "nchars_inuse = %zu\n", set->nchars_inuse);
 		fprintf(fp, "nelems = %zu\n", set->nelems);
 		fprintf(fp, "nelems8bit = %zu\n", set->nelems8bit);
