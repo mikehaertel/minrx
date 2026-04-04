@@ -81,8 +81,7 @@
 #endif
 
 #ifdef __GNUC__
-#undef inline
-#define inline __attribute__((__always_inline__)) inline
+#define unused unused __attribute__((__unused__))
 #endif
 
 static inline
@@ -1309,7 +1308,7 @@ nodelist_emplace_final(Compile *c, NodeList *x, NInt type, NInt arg0, NInt arg1,
 }
 
 static NodeList
-nodelist_empty()
+nodelist_empty(void)
 {
 	NodeList r;
 	r.first = (ListNode *) NULL;
@@ -1385,7 +1384,7 @@ alt(Compile *c, bool nested, NInt nstk)
 		size_t count = 0;
 		while (c->wc == L'|') {
 			if (count == NAlt) {
-				size_t alloc = NAlt * 2;
+				volatile size_t alloc = NAlt * 2; // volatile is logically unnecessary but prevents mistaken gcc warning
 				Subexp *newalts = (Subexp *) malloc(alloc * sizeof (Subexp));
 				if (!newalts)
 					cerr(c, MINRX_REG_ESPACE);
