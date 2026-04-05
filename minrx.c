@@ -1080,8 +1080,15 @@ cset_parse(Compile *c, CSet *cs, minrx_regcomp_flags_t flags, WConv_Encoding enc
 			cset_set_range(c, cs, wclo, wchi);
 			if ((flags & MINRX_REG_ICASE) != 0) {
 				for (WChar wc = wclo; wc <= wchi; ++wc) {
-					cset_set(c, cs, enc == Byte ? tolower(wc) : towlower(wc));
-					cset_set(c, cs, enc == Byte ? toupper(wc) : towupper(wc));
+					WChar l, u;
+
+					l = enc == Byte ? tolower(wc) : towlower(wc);
+					u = enc == Byte ? toupper(wc) : towupper(wc);
+					// only add the char if it's outside the original range
+					if (l < wclo || l > wchi)
+						cset_set(c, cs, l);
+					if (u < wclo || u > wchi)
+						cset_set(c, cs, u);
 				}
 			}
 		}
