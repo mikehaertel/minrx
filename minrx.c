@@ -1906,8 +1906,7 @@ firstbytes(Compile *c, FirstBytes *fb, int32_t *fu, WConv_Encoding e, const CSet
 {
 	if (!firstcset)
 		return false;
-	cset_firstbytes(c, firstcset, fb, fu, e);
-	return true;
+	return cset_firstbytes(c, firstcset, fb, fu, e);
 }
 
 static Regexp *
