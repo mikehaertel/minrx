@@ -880,7 +880,8 @@ static void
 cset_construct(Compile *c, CSet *cs, WConv_Encoding enc)
 {
 	int err = CSET_SUCCESS;
-	cs->charset = charset_create(&err, enc == Byte, enc == UTF8);
+	cs->charset = charset_create(&err, enc == Byte, enc == UTF8,
+				(c->flags & MINRX_REG_ICASE) != 0);
 	if (!cs->charset)
 		cserr(c, err);
 }
@@ -929,14 +930,6 @@ cset_set(Compile *c, CSet *cs, WChar wc)
 		cserr(c, err);
 }
 
-static void
-cset_set_ic(Compile *c, CSet *cs, WChar wc)
-{
-	int err = charset_add_char_ic(cs->charset, wc);
-	if (err != CSET_SUCCESS)
-		cserr(c, err);
-}
-
 static bool
 cset_test(const CSet *cs, WChar wc)
 {
@@ -944,22 +937,11 @@ cset_test(const CSet *cs, WChar wc)
 }
 
 static void
-cset_cclass(Compile *c, CSet *cs, minrx_regcomp_flags_t flags, WConv_Encoding unused, const char *bp, const char *ep)
+cset_cclass(Compile *c, CSet *cs, WConv_Encoding unused, const char *bp, const char *ep)
 {
 	int err = charset_add_cclass2(cs->charset, bp, ep);
 	if (err != CSET_SUCCESS)
 		cserr(c, err);
-	if ((flags & MINRX_REG_ICASE) != 0) {
-		if (ep - bp == 5 && strncmp(bp, "lower", 5) == 0) {
-			err = charset_add_cclass(cs->charset, "upper");
-			if (err != CSET_SUCCESS)
-				cserr(c, err);
-		} else if (ep - bp == 5 && strncmp(bp, "upper", 5) == 0) {
-			err = charset_add_cclass(cs->charset, "lower");
-			if (err != CSET_SUCCESS)
-				cserr(c, err);
-		}
-	}
 }
 
 static void
@@ -998,15 +980,6 @@ cset_parse(Compile *c, CSet *cs, minrx_regcomp_flags_t flags, WConv_Encoding enc
 				int err = charset_add_collate(c, cs->charset, coll);
 				if (err != CSET_SUCCESS)
 					cserr(c, err);
-				if ((flags & MINRX_REG_ICASE) != 0) {
-					if (iswlower(wc))
-						coll[0] = towupper(wc);
-					else if (iswupper(wc))
-						coll[0] = towlower(wc);
-					err = charset_add_collate(c, cs->charset, coll);
-					if (err != CSET_SUCCESS)
-						cserr(c, err);
-				}
 #endif
 				wc = wconv_nextchr(wconv);
 				if (wc != L'.' || (wc = wconv_nextchr(wconv)) != L']')
@@ -1023,18 +996,12 @@ cset_parse(Compile *c, CSet *cs, minrx_regcomp_flags_t flags, WConv_Encoding enc
 				if (wc != L']')
 					cerr(c, MINRX_REG_ECTYPE);
 				wc = wconv_nextchr(wconv);
-				cset_cclass(c, cs, flags, enc, bp, ep);
+				cset_cclass(c, cs, enc, bp, ep);
 				continue;
 			} else if (wc == L'=') {
 				wc = wconv_nextchr(wconv);
 				wclo = wchi = wc;
 				cset_add_equiv(c, cs, wc);
-				if ((flags & MINRX_REG_ICASE) != 0) {
-					if (iswlower(wc))
-						cset_add_equiv(c, cs, towupper(wc));
-					else if (iswupper(wc))
-						cset_add_equiv(c, cs, towlower(wc));
-				}
 				wc = wconv_nextchr(wconv);
 				if (wc != L'=' || (wc = wconv_nextchr(wconv)) != L']')
 					cerr(c, MINRX_REG_ECOLLATE);
@@ -1078,17 +1045,6 @@ cset_parse(Compile *c, CSet *cs, minrx_regcomp_flags_t flags, WConv_Encoding enc
 			cerr(c, MINRX_REG_ERANGE);
 		if (wclo >= 0) {
 			cset_set_range(c, cs, wclo, wchi);
-			if ((flags & MINRX_REG_ICASE) != 0) {
-				for (WChar wc = wclo; wc <= wchi; ++wc) {
-					// add case alternatives only if outside the original range
-					WChar l = enc == Byte ? tolower(wc) : towlower(wc);
-					WChar u = enc == Byte ? toupper(wc) : towupper(wc);
-					if (l < wclo || l > wchi)
-						cset_set(c, cs, l);
-					if (u < wclo || u > wchi)
-						cset_set(c, cs, u);
-				}
-			}
 		}
 		if (range && wc == L'-' && wconv_lookahead(wconv) != L']')
 			cerr(c, MINRX_REG_ERANGE);
@@ -1650,7 +1606,7 @@ chr(Compile *c, bool nested, NInt nstk)
 			nodelist_emplace_first(c, &lhs, (NInt) c->wc, 0, 0, nstk);
 		} else {
 			csets_emplace_back(c, c->enc);
-			cset_set_ic(c, csets_back(&c->csets), c->wc);
+			cset_set(c, csets_back(&c->csets), c->wc);
 			nodelist_emplace_final(c, &lhs, Cset, csets_size(&c->csets) - 1, 0, nstk);
 		}
 		c->wc = wconv_nextchr(&c->wconv);

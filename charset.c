@@ -54,17 +54,18 @@ typedef struct set_item {
 	int32_t start, end;
 } set_item;
 struct _charset {
-	bool     no_newlines;       // If \n can't be in the set
-	bool     finalized;         // No more changes possible
-	bool	 is_utf8;			// True if using a UTF-8 character set
-	bool	 locale_is_8bit;	// Use isalpha() etc. instead of iswalpha() etc.
-	size_t   nchars_inuse;      // Number of characters used
-	size_t   nchars_allocated;  // Number of characters allocated
-	int32_t  *chars;            // Characters added to the set
-	size_t   nelems;            // Number of elements (items) in use
-	size_t   allocated;         // Number allocated
-	size_t	 nelems8bit;		// Number of elements covering 0-255
-	set_item *items;            // Array of items
+    bool     no_newlines;       // If \n can't be in the set
+    bool     finalized;         // No more changes possible
+    bool     is_utf8;           // True if using a UTF-8 character set
+    bool     locale_is_8bit;    // Use isalpha() etc. instead of iswalpha() etc.
+    bool     ignore_case;       // This charset should ignore case
+    size_t   nchars_inuse;      // Number of characters used
+    size_t   nchars_allocated;  // Number of characters allocated
+    int32_t  *chars;            // Characters added to the set
+    size_t   nelems;            // Number of elements (items) in use
+    size_t   allocated;         // Number allocated
+    size_t   nelems8bit;        // Number of elements covering 0-255
+    set_item *items;            // Array of items
 };
 
 static const set_item digit[] = {
@@ -3396,6 +3397,69 @@ static struct _class_cache {
 	charset_t *set;
 	struct _class_cache *next;	// linked list
 } *class_cache[53];
+/* add_char_to_set --- handle adding a single character - mechanics  */
+
+static int
+add_char_to_set(charset_t *set, int32_t wc)
+{
+	/* NULL ponter, finalized, and range checks handled by callers */
+	if (set->chars == NULL) {
+		set->chars = (int32_t *) malloc(sizeof(int32_t) * INITIAL_ALLOCATION);
+		if (set->chars == NULL)
+			return CSET_ESPACE;
+	
+		set->nchars_allocated = INITIAL_ALLOCATION;
+		set->nchars_inuse = 0;
+	} else if (set->nchars_inuse + 1 >= set->nchars_allocated) {
+		int new_amount = set->nchars_allocated * 2;
+		int32_t *new_data = (int32_t *) realloc(set->chars, new_amount * sizeof(int32_t));
+	
+		if (new_data == NULL)
+			return CSET_ESPACE;
+	
+		memset(new_data + set->nchars_allocated, 0, set->nchars_allocated * sizeof(int32_t));
+		set->nchars_allocated = new_amount;
+		set->chars = new_data;
+	}
+
+	set->chars[set->nchars_inuse++] = wc;
+	set->chars[set->nchars_inuse] = L'\0';	// make it into a string
+
+	return CSET_SUCCESS;
+}
+/* add_range_to_set --- add a range item - mechanics */
+
+static int
+add_range_to_set(charset_t *set, int32_t first, int32_t last)
+{
+	// null pointer, finalized, and range check done in callers
+
+	if (set->items == NULL) {
+		set->items = (set_item *) malloc(sizeof(set_item) * INITIAL_ALLOCATION);
+		if (set->items == NULL)
+			return CSET_ESPACE;
+	
+		set->allocated = INITIAL_ALLOCATION;
+		set->nelems = 0;
+	} else if (set->nelems + 1 >= set->allocated) {
+		int new_amount = set->allocated * 2;
+		set_item *new_data = (set_item *) realloc(set->items, new_amount * sizeof(set_item));
+	
+		if (new_data == NULL)
+			return CSET_ESPACE;
+	
+		memset(new_data + set->allocated, 0, set->allocated * sizeof(set_item));
+		set->allocated = new_amount;
+		set->items = new_data;
+	}
+
+	set_item new_item;
+	new_item.start = first;
+	new_item.end = last;
+	set->items[set->nelems++] = new_item;
+
+	return CSET_SUCCESS;
+}
 static const struct equiv {
 	int32_t		the_char;
 	int			count;
@@ -8555,6 +8619,120 @@ cmp_refs(const void *l, const void *r)
 
 	return left->the_char - right->the_char;
 }
+/* add_equiv_to_set --- add the equivalent characters - mechanics */
+
+static int
+add_equiv_to_set(charset_t *set, int32_t equiv)
+{
+	// null pointer, finalized, and range check done in caller
+
+	int result;
+
+	// search the refs table first
+	struct ref key_ref = { equiv, 0 };
+	struct ref *ref = (struct ref *) bsearch(& key_ref, ref_table,
+						sizeof(ref_table) / sizeof(ref_table[0]),
+						sizeof(struct ref), cmp_refs);
+
+	// set up key for the equivs_table
+	struct equiv key_equiv;
+	// use memset() not an initializer to avoid compiler warnings.
+	memset(& key_equiv, 0, sizeof(key_equiv));
+
+	if (ref == NULL)			// was not in reference table
+		key_equiv.the_char = equiv;
+	else
+		key_equiv.the_char = ref->key_char;
+
+	// and search the equivs table
+	struct equiv *eq = (struct equiv *) bsearch(& key_equiv, equiv_table,
+						sizeof(equiv_table) / sizeof(equiv_table[0]),
+						sizeof(struct equiv), cmp_equivs);
+
+	if (eq == NULL) {	// not in the equivs table, add the character
+		if ((result = add_char_to_set(set, equiv)) != CSET_SUCCESS)
+			return result;
+	} else {
+		// the key character
+		if ((result = add_char_to_set(set, eq->the_char)) != CSET_SUCCESS)
+			return result;
+
+		// and add the equivalent ones
+		for (int i = 0; i < eq->count; i++)
+			if ((result = add_char_to_set(set, eq->equivs[i])) != CSET_SUCCESS)
+				return result;
+	}
+
+	return result;
+}
+/* add_cclass_to_set --- add a character class, like "alnum" - mechanics */
+
+static int find_class(const char *cclass);
+static int wide_char_range_loop(charset_t *set, const char *cclass, wctype_t ctype);
+
+static int
+add_cclass_to_set(charset_t *set, const char *cclass)
+{
+	// various checks handled by caller
+
+	int index = find_class(cclass);
+
+	if (index == -1) {
+		if (set->locale_is_8bit)	// an 8-bit locale
+			return CSET_ECTYPE;
+		else {
+			// maybe it's locale-specific
+			wctype_t ctype = wctype(cclass);	// look it up
+			if (ctype == 0)	// it's invalid
+				return CSET_ECTYPE;
+			
+			// this saves the locale + cclass info for possible reuse
+			return wide_char_range_loop(set, cclass, ctype);
+		}
+	}
+
+	// we have a standard cclass
+	if (set->locale_is_8bit) {
+		int (*charcheckfunc)(int c) = class_data[index].charcheckfunc;
+		for (int32_t i = 0; i < 256; i++) {
+			if (charcheckfunc(i)) {
+				int ret = charset_add_char(set, i);
+				if (ret != CSET_SUCCESS)
+					return ret;
+			}
+		}
+	} else if (set->is_utf8) {
+		const set_item *data[2];
+		
+		data[0] = class_data[index].data[0];
+		data[1] = class_data[index].data[1];
+		
+		for (int i = 0; i < 2; i++) {
+			if (data[i] == NULL)
+				break;
+			for (int j = 0; data[i][j].start != -1; j++) {
+				int ret = add_range_to_set(set, data[i][j].start, data[i][j].end);
+				if (ret != CSET_SUCCESS)
+					return ret;
+			}
+		}
+	} else {
+		wctype_t ctype = class_data[index].wctype;
+		if (ctype == 0) {	// haven't checked it yet
+			ctype = wctype(cclass);
+		
+			if (ctype == 0)	// bad class, should not happen for standard classes
+				return CSET_ECTYPE;
+		}
+		
+		// all ok..
+		class_data[index].wctype = ctype;	// save for next time
+		// this saves the locale + cclass info for possible reuse
+		return wide_char_range_loop(set, cclass, ctype);
+	}
+
+	return CSET_SUCCESS;
+}
 /* find_cclass --- search class data for a known character class */
 
 static int
@@ -8604,7 +8782,7 @@ find_class_in_cache(charset_t *set, const char *cclass, int *errcode, bool *is_n
 		}
 		pcache->name = buf;
 		pcache->next = NULL;
-		charset_t *newset = charset_create(errcode, set->locale_is_8bit, set->is_utf8);
+		charset_t *newset = charset_create(errcode, set->locale_is_8bit, set->is_utf8, set->ignore_case);
 		if (newset == NULL) {
 			// *errcode already set
 			free((void *) pcache->name);
@@ -8629,7 +8807,7 @@ find_class_in_cache(charset_t *set, const char *cclass, int *errcode, bool *is_n
 		}
 		pcache->name = buf;
 		pcache->next = NULL;
-		charset_t *newset = charset_create(errcode, set->locale_is_8bit, set->is_utf8);
+		charset_t *newset = charset_create(errcode, set->locale_is_8bit, set->is_utf8, set->ignore_case);
 		if (newset == NULL) {
 			// *errcode already set
 			free((void *) pcache->name);
@@ -8794,7 +8972,7 @@ charset_finalize(charset_t *set)
 		} else if (set->chars[j] > set->chars[i] + 1) {
 			// acd...
 			// push a and start next range at c
-			result = charset_add_range(set, set->chars[range_start], set->chars[i]);
+			result = add_range_to_set(set, set->chars[range_start], set->chars[i]);
 			if (result != CSET_SUCCESS)
 				return result;
 			range_start = j;
@@ -8802,7 +8980,7 @@ charset_finalize(charset_t *set)
 	}
 	// Get any final range or character
 	if (set->nchars_inuse > 0 && range_start <= set->nchars_inuse - 1) {
-		result = charset_add_range(set, set->chars[range_start],
+		result = add_range_to_set(set, set->chars[range_start],
 					set->chars[set->nchars_inuse-1]);
 		if (result != CSET_SUCCESS)
 			return result;
@@ -8853,7 +9031,8 @@ charset_finalize(charset_t *set)
 /* charset_create --- make a new charset_t and initialize it */
 
 Static charset_t *
-charset_create(int *errcode, bool locale_is_8bit, bool is_utf8)
+charset_create(int *errcode, bool locale_is_8bit,
+               bool is_utf8, bool ignore_case)
 {
 	if (errcode == NULL)
 		return NULL;
@@ -8867,11 +9046,12 @@ charset_create(int *errcode, bool locale_is_8bit, bool is_utf8)
 	memset(set, 0, sizeof(charset_t));
 	set->locale_is_8bit = locale_is_8bit;
 	set->is_utf8 = is_utf8;
+	set->ignore_case = ignore_case;
 
 	*errcode = CSET_SUCCESS;
 	return set;
 }
-/* charset_add_char --- add a single wide character to the set */
+/* charset_add_char --- add a single wide character to the set - logic */
 
 Static int
 charset_add_char(charset_t *set, int32_t wc)
@@ -8884,65 +9064,30 @@ charset_add_char(charset_t *set, int32_t wc)
 	if (wc < 0)
 		return CSET_ERANGE;
 
-	if (set->chars == NULL) {
-		set->chars = (int32_t *) malloc(sizeof(int32_t) * INITIAL_ALLOCATION);
-		if (set->chars == NULL)
-			return CSET_ESPACE;
+	int result = add_char_to_set(set, wc);
+	if (result != CSET_SUCCESS)
+		return result;
+
+	if (set->ignore_case) {
+		int32_t wcl = set->locale_is_8bit ? tolower(wc) : (int32_t) towlower(wc);
+		int32_t wcu = set->locale_is_8bit ? toupper(wc) : (int32_t) towupper(wc);
 	
-		set->nchars_allocated = INITIAL_ALLOCATION;
-		set->nchars_inuse = 0;
-	} else if (set->nchars_inuse + 1 >= set->nchars_allocated) {
-		int new_amount = set->nchars_allocated * 2;
-		int32_t *new_data = (int32_t *) realloc(set->chars, new_amount * sizeof(int32_t));
-	
-		if (new_data == NULL)
-			return CSET_ESPACE;
-	
-		memset(new_data + set->nchars_allocated, 0, set->nchars_allocated * sizeof(int32_t));
-		set->nchars_allocated = new_amount;
-		set->chars = new_data;
-	}
-
-	set->chars[set->nchars_inuse++] = wc;
-	set->chars[set->nchars_inuse] = L'\0';	// make it into a string
-
-	return CSET_SUCCESS;
-}
-/* charset_add_char_ic --- add a single wide character to the set, and its case alternatives */
-
-Static int
-charset_add_char_ic(charset_t *set, int32_t wc)
-{
-	if (set == NULL)
-		return CSET_EBADPTR;
-	if (set->finalized)
-		return CSET_EFROZEN;
-
-	if (wc < 0)
-		return CSET_ERANGE;
-
-	int result1 = charset_add_char(set, wc);
-
-	if (result1 == CSET_SUCCESS) {
-		int result2, result3;
-		result2 = result3 = CSET_SUCCESS;
-
-		int32_t wcl = set->locale_is_8bit == 1 ? tolower(wc) : (int32_t) towlower(wc);
-		int32_t wcu = set->locale_is_8bit == 1 ? toupper(wc) : (int32_t) towupper(wc);
-
-		if (wc != wcl || wc != wcu) {
-			result2 = charset_add_char(set, wcl);
-			result3 = charset_add_char(set, wcu);
+		if (wcl != wc) {
+			result = add_char_to_set(set, wcl);
+			if (result != CSET_SUCCESS)
+				return result;
 		}
-		if (result3 != CSET_SUCCESS)
-			return result3;
-		if (result2 != CSET_SUCCESS)
-			return result2;
+	
+		if (wcu != wc) {
+			result = add_char_to_set(set, wcu);
+			if (result != CSET_SUCCESS)
+				return result;
+		}
 	}
 
-	return result1;
+	return result;
 }
-/* charset_add_range --- add a range item */
+/* charset_add_range --- add a range item - logic */
 
 Static int
 charset_add_range(charset_t *set, int32_t first, int32_t last)
@@ -8955,29 +9100,28 @@ charset_add_range(charset_t *set, int32_t first, int32_t last)
 	if (first < 0 || last < 0 || first > last)
 		return CSET_ERANGE;
 
-	if (set->items == NULL) {
-		set->items = (set_item *) malloc(sizeof(set_item) * INITIAL_ALLOCATION);
-		if (set->items == NULL)
-			return CSET_ESPACE;
-	
-		set->allocated = INITIAL_ALLOCATION;
-		set->nelems = 0;
-	} else if (set->nelems + 1 >= set->allocated) {
-		int new_amount = set->allocated * 2;
-		set_item *new_data = (set_item *) realloc(set->items, new_amount * sizeof(set_item));
-	
-		if (new_data == NULL)
-			return CSET_ESPACE;
-	
-		memset(new_data + set->allocated, 0, set->allocated * sizeof(set_item));
-		set->allocated = new_amount;
-		set->items = new_data;
-	}
+	int result = add_range_to_set(set, first, last);
+	if (result != CSET_SUCCESS)
+		return result;
 
-	set_item new_item;
-	new_item.start = first;
-	new_item.end = last;
-	set->items[set->nelems++] = new_item;
+	if (set->ignore_case) {
+		for (int32_t i = first; i <= last; i++) {
+			int32_t wcl = set->locale_is_8bit ? tolower(i) : (int32_t) towlower(i);
+			int32_t wcu = set->locale_is_8bit ? toupper(i) : (int32_t) towupper(i);
+	
+			int ret;
+			if (wcl < first || wcl > last) {
+				ret = add_char_to_set(set, wcl);
+				if (ret != CSET_SUCCESS)
+					return ret;
+			}
+			if (wcu < first || wcu > last) {
+				ret = add_char_to_set(set, wcu);
+				if (ret != CSET_SUCCESS)
+					return ret;
+			}
+		}
+	}
 
 	return CSET_SUCCESS;
 }
@@ -9005,14 +9149,14 @@ charset_invert(charset_t *set, int *errcode)
 		}
 	}
 
-	charset_t *newset = charset_create(errcode, set->locale_is_8bit, set->is_utf8);
+	charset_t *newset = charset_create(errcode, set->locale_is_8bit, set->is_utf8, set->ignore_case);
 	if (newset == NULL)	// *errcode is already set
 		return NULL;
 
 	newset->no_newlines = set->no_newlines;
 
 	if (set->nelems == 0) {	// was empty
-		ret = charset_add_range(newset, 0, MAX_CODE_POINT);
+		ret = add_range_to_set(newset, 0, MAX_CODE_POINT);
 		if (ret == CSET_SUCCESS)
 			goto done;
 		else
@@ -9023,13 +9167,13 @@ charset_invert(charset_t *set, int *errcode)
 
 	for (size_t i = 0; i < set->nelems; i++) {
 		if (low < set->items[i].start) {
-			if ((ret = charset_add_range(newset, low, set->items[i].start - 1)) != CSET_SUCCESS)
+			if ((ret = add_range_to_set(newset, low, set->items[i].start - 1)) != CSET_SUCCESS)
 				goto fail;
 		}
 		low = set->items[i].end + 1;
 	}
 	if (low <= MAX_CODE_POINT) {
-		if ((ret = charset_add_range(newset, low, MAX_CODE_POINT)) != CSET_SUCCESS)
+		if ((ret = add_range_to_set(newset, low, MAX_CODE_POINT)) != CSET_SUCCESS)
 			goto fail;
 	}
 
@@ -9057,7 +9201,7 @@ charset_set_no_newlines(charset_t *set, bool no_newlines)
 	return CSET_SUCCESS;
 }
 #pragma GCC diagnostic pop
-/* charset_add_equiv --- add an equivalence class */
+/* charset_add_equiv --- add an equivalence class - logic */
 
 Static int
 charset_add_equiv(charset_t *set, int32_t equiv)
@@ -9073,46 +9217,30 @@ charset_add_equiv(charset_t *set, int32_t equiv)
 	int result;
 
 	if (! set->is_utf8) {
-		result = charset_add_char(set, equiv);
+		result = charset_add_char(set, equiv);	// handles ignore_case
 		return result;
 	}
 
-	// search the refs table first
-	struct ref key_ref = { equiv, 0 };
-	struct ref *ref = (struct ref *) bsearch(& key_ref, ref_table,
-						sizeof(ref_table) / sizeof(ref_table[0]),
-						sizeof(struct ref), cmp_refs);
+	result = add_equiv_to_set(set, equiv);
 
-	// set up key for the equivs_table
-	struct equiv key_equiv;
-	// use memset() not an initializer to avoid compiler warnings.
-	memset(& key_equiv, 0, sizeof(key_equiv));
+	if (set->ignore_case) {
+		int32_t wcl = set->locale_is_8bit ? tolower(equiv) : (int32_t) towlower(equiv);
+		int32_t wcu = set->locale_is_8bit ? toupper(equiv) : (int32_t) towupper(equiv);
 
-	if (ref == NULL)			// was not in reference table
-		key_equiv.the_char = equiv;
-	else
-		key_equiv.the_char = ref->key_char;
-
-	// and search the equivs table
-	struct equiv *eq = (struct equiv *) bsearch(& key_equiv, equiv_table,
-						sizeof(equiv_table) / sizeof(equiv_table[0]),
-						sizeof(struct equiv), cmp_equivs);
-
-	if (eq == NULL) {	// not in the equivs table, add the character
-		if ((result = charset_add_char(set, equiv)) != CSET_SUCCESS)
-			return result;
-	} else {
-		// the key character
-		if ((result = charset_add_char(set, eq->the_char)) != CSET_SUCCESS)
-			return result;
-
-		// and add the equivalent ones
-		for (int i = 0; i < eq->count; i++)
-			if ((result = charset_add_char(set, eq->equivs[i])) != CSET_SUCCESS)
+		if (wcl != equiv) {
+			result = add_equiv_to_set(set, wcl);
+			if (result != CSET_SUCCESS)
 				return result;
+		}
+
+		if (wcu != equiv) {
+			result = add_equiv_to_set(set, wcu);
+			if (result != CSET_SUCCESS)
+				return result;
+		}
 	}
 
-	return CSET_SUCCESS;
+	return result;
 }
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-function"
@@ -9131,10 +9259,10 @@ charset_add_collate(charset_t *set, const int32_t *collate)
 	if (collate[1] != L'\0')
 		return CSET_ECOLLATE;
 
-	return charset_add_char(set, collate[0]);
+	return charset_add_char(set, collate[0]);	// handles ignoring case
 }
 #pragma GCC diagnostic pop
-/* charset_add_cclass --- add a character class, like "alnum" */
+/* charset_add_cclass --- add a character class, like "alnum" - logic */
 
 Static int
 charset_add_cclass(charset_t *set, const char *cclass)
@@ -9146,63 +9274,26 @@ charset_add_cclass(charset_t *set, const char *cclass)
 	if (cclass == NULL)
 		return CSET_EBADPTR;
 
-	int index = find_class(cclass);
+	int result = add_cclass_to_set(set, cclass);
+	if (result != CSET_SUCCESS)
+		return result;
 
-	if (index == -1) {
-		if (set->locale_is_8bit)	// an 8-bit locale
-			return CSET_ECTYPE;
-		else {
-			// maybe it's locale-specific
-			wctype_t ctype = wctype(cclass);	// look it up
-			if (ctype == 0)	// it's invalid
-				return CSET_ECTYPE;
-			
-			// this saves the locale + cclass info for possible reuse
-			return wide_char_range_loop(set, cclass, ctype);
+	if (set->ignore_case) {
+		const char *other = NULL;
+
+		if (strcmp(cclass, "lower") == 0)
+			other = "upper";
+		else if (strcmp(cclass, "upper") == 0)
+			other = "lower";
+
+		if (other != NULL) {
+			result = add_cclass_to_set(set, other);
+			if (result != CSET_SUCCESS)
+				return result;
 		}
 	}
 
-	// we have a standard cclass
-	if (set->locale_is_8bit) {
-		int (*charcheckfunc)(int c) = class_data[index].charcheckfunc;
-		for (int32_t i = 0; i < 256; i++) {
-			if (charcheckfunc(i)) {
-				int ret = charset_add_char(set, i);
-				if (ret != CSET_SUCCESS)
-					return ret;
-			}
-		}
-	} else if (set->is_utf8) {
-		const set_item *data[2];
-		
-		data[0] = class_data[index].data[0];
-		data[1] = class_data[index].data[1];
-		
-		for (int i = 0; i < 2; i++) {
-			if (data[i] == NULL)
-				break;
-			for (int j = 0; data[i][j].start != -1; j++) {
-				int ret = charset_add_range(set, data[i][j].start, data[i][j].end);
-				if (ret != CSET_SUCCESS)
-					return ret;
-			}
-		}
-	} else {
-		wctype_t ctype = class_data[index].wctype;
-		if (ctype == 0) {	// haven't checked it yet
-			ctype = wctype(cclass);
-		
-			if (ctype == 0)	// bad class, should not happen for standard classes
-				return CSET_ECTYPE;
-		}
-		
-		// all ok..
-		class_data[index].wctype = ctype;	// save for next time
-		// this saves the locale + cclass info for possible reuse
-		return wide_char_range_loop(set, cclass, ctype);
-	}
-
-	return CSET_SUCCESS;
+	return result;
 }
 /* charset_add_cclass2 --- get class name from unterminated string */
 
@@ -9242,7 +9333,7 @@ charset_copy(charset_t *set, int *errcode)
 		return NULL;
 	}
 
-	charset_t *newset = charset_create(errcode, set->locale_is_8bit, set->is_utf8);
+	charset_t *newset = charset_create(errcode, set->locale_is_8bit, set->is_utf8, set->ignore_case);
 	if (newset == NULL)
 		return NULL;
 
