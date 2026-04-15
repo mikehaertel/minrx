@@ -937,7 +937,7 @@ cset_test(const CSet *cs, WChar wc)
 }
 
 static void
-cset_cclass(Compile *c, CSet *cs, minrx_regcomp_flags_t flags, WConv_Encoding unused, const char *bp, const char *ep)
+cset_cclass(Compile *c, CSet *cs, WConv_Encoding unused, const char *bp, const char *ep)
 {
 	int err = charset_add_cclass2(cs->charset, bp, ep);
 	if (err != CSET_SUCCESS)
@@ -996,7 +996,7 @@ cset_parse(Compile *c, CSet *cs, minrx_regcomp_flags_t flags, WConv_Encoding enc
 				if (wc != L']')
 					cerr(c, MINRX_REG_ECTYPE);
 				wc = wconv_nextchr(wconv);
-				cset_cclass(c, cs, flags, enc, bp, ep);
+				cset_cclass(c, cs, enc, bp, ep);
 				continue;
 			} else if (wc == L'=') {
 				wc = wconv_nextchr(wconv);
