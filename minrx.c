@@ -975,12 +975,6 @@ cset_parse(Compile *c, CSet *cs, minrx_regcomp_flags_t flags, WConv_Encoding enc
 			if (wc == L'.') {
 				wc = wconv_nextchr(wconv);
 				wclo = wchi = wc;
-#ifdef CHARSET_NOT_YET
-				int32_t coll[2] = { wc, L'\0' };
-				int err = charset_add_collate(c, cs->charset, coll);
-				if (err != CSET_SUCCESS)
-					cserr(c, err);
-#endif
 				wc = wconv_nextchr(wconv);
 				if (wc != L'.' || (wc = wconv_nextchr(wconv)) != L']')
 					cerr(c, MINRX_REG_ECOLLATE);
