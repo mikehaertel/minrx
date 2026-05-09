@@ -8990,32 +8990,18 @@ charset_finalize(charset_t *set)
 		qsort(set->items, set->nelems,
 			sizeof(set_item), item_compare_for_sorting);
 	
-	// condense it
+	// coalesce adjacent items that have no gaps between them (or that actually overlap)
+	#ifndef MAX
+	#define MAX(A, B) ((A) >= (B) ? (A) : (B))
+	#endif
 	set_item *items = set->items;
-	for (i = 0, j = 1; j < set->nelems; i++, j++) {
-		bool need_shift = false;
-		if (items[i].start == items[j].start && items[i].end == items[j].end) {
-			need_shift = true;
-		} else if (items[i].end + 1 == items[j].start) {
-			items[i].end = items[j].end;
-			need_shift = true;
-		} else if (items[i].start < items[j].start && items[i].end > items[j].end) {
-			need_shift = true;
-		} else if (   items[i].start <= items[j].start
-		           && items[i].end > items[j].start
-		           && items[j].end >= items[i].end) {
-			items[i].end = items[j].end;
-			need_shift = true;
-		}
-		if (need_shift) {
-			for (size_t k = j + 1; k < set->nelems; j++, k++)
-				items[j] = items[k];
-			
-			set->nelems--;
-			i--;	// compensate for loop, continue checking at current position
-			j = i + 1;
-		}
-		// otherwise, just continue around the loop
+	if (set->nelems != 0) {
+		for (i = 1, j = 1; j < set->nelems; j++)
+			if (items[i - 1].end + 1 >= items[j].start)
+				items[i - 1].end = MAX(items[i - 1].end, items[j].end);
+			else
+				items[i++] = items[j];
+		set->nelems = i; 
 	}
 	set->nelems8bit = set->nelems;
 	for (size_t i = 0; i < set->nelems; i++) {
