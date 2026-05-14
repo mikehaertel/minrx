@@ -8996,11 +8996,12 @@ charset_finalize(charset_t *set)
 	#endif
 	set_item *items = set->items;
 	if (set->nelems != 0) {
-		for (i = 1, j = 1; j < set->nelems; j++)
+		for (i = 1, j = 1; j < set->nelems; j++) {
 			if (items[i - 1].end + 1 >= items[j].start)
 				items[i - 1].end = MAX(items[i - 1].end, items[j].end);
 			else
 				items[i++] = items[j];
+		}
 		set->nelems = i; 
 	}
 	set->nelems8bit = set->nelems;
