@@ -1962,7 +1962,6 @@ execute_construct(Execute *e, const Regexp *r, minrx_regexec_flags_t flags, cons
 	e->gen = 0;
 	e->off = 0;
 	wconv_construct(&e->wconv, r->enc, bp, ep);
-	e->wcprev = End;
 	cowvec_allocator_construct(&e->allocator, e->nestoff + r->nmin);
 	cowvec_construct(&e->best, (COWVec_Allocator *) NULL);
 	e->bestmincount = 0;
@@ -2309,6 +2308,8 @@ execute_epsclosure(Execute *e, QVec *ncsv, WChar wcnext)
 	} while (!qset_empty(&e->epsq));
 }
 
+#define WCNEXT(E, WCN) ((E)->wcprev = (WCN), (E)->off = wconv_off(&(E)->wconv), (WCN) = wconv_nextchr(&(E)->wconv))
+
 static int
 execute(Execute *e, size_t nm, minrx_regmatch_t *rm)
 {
@@ -2327,11 +2328,27 @@ execute(Execute *e, size_t nm, minrx_regmatch_t *rm)
 		return err;
 	}
 	nstate_construct(&nsinit, &e->allocator);		// real construction
-	e->off = wconv_off(&e->wconv);
-	WChar wcnext = wconv_nextchr(&e->wconv);
-	if ((e->flags & MINRX_REG_RESUME) != 0 && rm && rm[0].rm_eo > 0)
-		while (wcnext != End && (ptrdiff_t) e->off < rm[0].rm_eo)
-			e->wcprev = wcnext, e->off = wconv_off(&e->wconv), wcnext = wconv_nextchr(&e->wconv);
+	WChar wcnext = End;
+	WCNEXT(e, wcnext);
+	if (e->wconv.ep > e->wconv.bp && (e->flags & MINRX_REG_RESUME) != 0 && rm && rm[0].rm_eo > 0) {
+		ptrdiff_t o = MIN(rm[0].rm_eo, e->wconv.ep - e->wconv.bp);
+		switch (e->r->enc) {
+		case Byte:
+			e->wconv.cp = e->wconv.bp + o - 1;
+			WCNEXT(e, wcnext);
+			break;
+		case UTF8:
+			e->wconv.cp = e->wconv.bp + o - MIN(o, 8);
+			WCNEXT(e, wcnext);
+			break;
+		default:
+			/* MBtoWC requires scan from start due to possible shift states */
+			break;
+		}
+		while (wcnext != End && (ptrdiff_t) e->off < o)
+			WCNEXT(e, wcnext);
+	}
+	/* n.b. regcomp() disables rapid skip-ahead if the encoding is not Byte or UTF8 */
 	if ((e->flags & MINRX_REG_NOFIRSTBYTES) == 0 && e->r->firstvalid && !cset_test(&*e->r->firstcset, wcnext)) {
 	zoom:
 		/* empty statement after label */ ;
@@ -2358,7 +2375,7 @@ execute(Execute *e, size_t nm, minrx_regmatch_t *rm)
 			}
 			wcnext = wconv_nextchr(&e->wconv);
 		}
-		++e->gen, e->wcprev = wcnext, e->off = wconv_off(&e->wconv), wcnext = wconv_nextchr(&e->wconv);
+		++e->gen, WCNEXT(e, wcnext);
 	}
 	nsinit.boff = e->off;
 	for (size_t i = 0; i < e->r->nmin; ++i)
@@ -2369,8 +2386,7 @@ execute(Execute *e, size_t nm, minrx_regmatch_t *rm)
 	for (;;) { // unrolled to ping-pong roles of mcsvs[0]/[1]
 		if (wcnext == End)
 			break;
-		++e->gen;
-		e->wcprev = wcnext, e->off = wconv_off(&e->wconv), wcnext = wconv_nextchr(&e->wconv);
+		++e->gen, WCNEXT(e, wcnext);
 		while (!qvec_empty(&mcsvs[0])) {
 			QVecRemove r = qvec_remove(&mcsvs[0]);
 			execute_add(e, &mcsvs[1], r.index + 1, e->nodes[r.index].nstk, &r.nstate, wcnext);
@@ -2390,8 +2406,7 @@ execute(Execute *e, size_t nm, minrx_regmatch_t *rm)
 		}
 		if (wcnext == End)
 			break;
-		++e->gen;
-		e->wcprev = wcnext, e->off = wconv_off(&e->wconv), wcnext = wconv_nextchr(&e->wconv);
+		++e->gen, WCNEXT(e, wcnext);
 		while (!qvec_empty(&mcsvs[1])) {
 			QVecRemove r = qvec_remove(&mcsvs[1]);
 			execute_add(e, &mcsvs[0], r.index + 1, e->nodes[r.index].nstk, &r.nstate, wcnext);
