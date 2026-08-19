@@ -2097,8 +2097,7 @@ execute_destruct(Execute *e, bool reusable)
 	qvec_clear(&e->mcsv[1]);
 	qvec_clear(&e->mcsv[0]);
 	qvec_clear(e->epsv);
-	while (!qset_empty(e->epsq))
-		(void) qset_remove(e->epsq);
+	qset_clear(e->epsq);
 	sc->freelist = e->allocator.freelist;
 	if (!reusable || sc == &e->own)
 		scratch_destruct(sc);
