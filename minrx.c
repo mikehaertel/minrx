@@ -2045,6 +2045,7 @@ struct Execute {
 	QVec *mcsv;
 	Scratch own;		// used where the Regexp's is already taken
 	bool exiting;
+	bool matched;		// used only by nosub matcher
 };
 
 static bool
@@ -2082,6 +2083,7 @@ execute_construct(Execute *e, Regexp *r, minrx_regexec_flags_t flags, const char
 	e->mcsv = e->scratch->mcsv;
 	e->allocator.freelist = e->scratch->freelist;
 	e->exiting = r->anchored;
+	e->matched = false;
 	return true;
 }
 
@@ -2564,6 +2566,188 @@ exit:
 	}
 }
 
+inline static void
+nosub_execute_add(Execute *e, QVec *ncsv, NInt k, WChar wcnext)
+{
+	const Node *np = &e->nodes[k];
+	if (np->type <= Cset) {
+		if (np->type == (NInt) wcnext || (np->type == Cset && cset_test(csets_aref(&e->r->csets, np->args[0]), wcnext)))
+			qset_insert(&ncsv->qset, k);
+	} else {
+		if (qset_insert(&e->epsv->qset, k))
+			qset_insert(e->epsq, k);
+	}
+}
+
+static void
+nosub_execute_epsclosure(Execute *e, QVec *ncsv, WChar wcnext)
+{
+	const Node *nodes = e->nodes;
+	bool (*is_word)(WChar) = e->r->enc == Byte ? is_word_byte : is_word_wide;
+	do {
+		NInt k = qset_remove(e->epsq);
+		const Node *np = &e->nodes[k];
+		switch (np->type) {
+		case Exit:
+			e->exiting = true;
+			e->matched = true;
+			break;
+		case Fork:
+			do {
+				nosub_execute_add(e, ncsv, k + 1, wcnext);
+				k = k + 1 + nodes[k].args[0];
+			} while (nodes[k].type != Join);
+			break;
+		case Goto:
+			nosub_execute_add(e, ncsv, k + 1 + np->args[1], wcnext);
+			break;
+		case Join:
+		case MinB:
+		case MinL:
+		case MinR:
+		case SubL:
+		case SubR:
+			nosub_execute_add(e, ncsv, k + 1, wcnext);
+			break;
+		case Loop:
+			nosub_execute_add(e, ncsv, k + 1, wcnext);
+			if (np->args[1])
+				nosub_execute_add(e, ncsv, k + 1 + np->args[0], wcnext);
+			break;
+		case Next:
+			nosub_execute_add(e, ncsv, k + 1, wcnext);
+			if (np->args[1])
+				nosub_execute_add(e, ncsv, k - np->args[0], wcnext);
+			break;
+		case Skip:
+			nosub_execute_add(e, ncsv, k + 1, wcnext);
+			nosub_execute_add(e, ncsv, k + 1 + np->args[0], wcnext);
+			break;
+		case ZBOB:
+			if (e->off == 0 && (e->flags & MINRX_REG_NOTBOL) == 0)
+				nosub_execute_add(e, ncsv, k + 1, wcnext);
+			break;
+		case ZEOB:
+			if (wcnext == End && (e->flags & MINRX_REG_NOTEOL) == 0)
+				nosub_execute_add(e, ncsv, k + 1, wcnext);
+			break;
+		case ZBOL:
+			if (((e->off == 0 && (e->flags & MINRX_REG_NOTBOL) == 0)) || e->wcprev == L'\n')
+				nosub_execute_add(e, ncsv, k + 1, wcnext);
+			break;
+		case ZEOL:
+			if (((wcnext == End && (e->flags & MINRX_REG_NOTEOL) == 0)) || wcnext == L'\n')
+				nosub_execute_add(e, ncsv, k + 1, wcnext);
+			break;
+		case ZBOW:
+			if ((e->off == 0 || !is_word(e->wcprev)) && (wcnext != End && is_word(wcnext)))
+				nosub_execute_add(e, ncsv, k + 1, wcnext);
+			break;
+		case ZEOW:
+			if ((e->off != 0 && is_word(e->wcprev)) && (wcnext == End || !is_word(wcnext)))
+				nosub_execute_add(e, ncsv, k + 1, wcnext);
+			break;
+		case ZXOW:
+			if (   ((e->off == 0 || !is_word(e->wcprev)) && (wcnext != End && is_word(wcnext)))
+			    || ((e->off != 0 && is_word(e->wcprev)) && (wcnext == End || !is_word(wcnext))))
+				nosub_execute_add(e, ncsv, k + 1, wcnext);
+			break;
+		case ZNWB:
+			if (   (e->off == 0 && wcnext == End)
+			    || (e->off == 0 && wcnext != End && !is_word(wcnext))
+			    || (e->off != 0 && !is_word(e->wcprev) && wcnext == End)
+			    || (e->off != 0 && wcnext != End && is_word(e->wcprev) == is_word(wcnext)))
+				nosub_execute_add(e, ncsv, k + 1, wcnext);
+			break;
+		default:
+			abort();
+			break;
+		}
+	} while (!qset_empty(e->epsq));
+	qset_clear(&e->epsv->qset);
+}
+
+static int
+nosub_execute(Execute *e)
+{
+	QVec *mcsvs = e->mcsv;
+	qset_clear(e->epsq);
+	qvec_clear(e->epsv);
+	qvec_clear(&mcsvs[0]);
+	qvec_clear(&mcsvs[1]);
+	WChar wcnext = End;
+	WCNEXT(e, wcnext);
+	if ((e->flags & MINRX_REG_NOFIRSTBYTES) == 0 && e->r->firstvalid && !cset_test(&*e->r->firstcset, wcnext)) {
+	zoom:
+		/* empty statement after label */ ;
+		const char *cp = e->wconv.cp, *ep = e->wconv.ep;
+		if (e->r->firstunique != -1) {
+			cp = (const char *) memchr(cp, e->r->firstunique, ep - cp);
+			if (cp == (const char *) NULL)
+				goto exit;
+		} else {
+			const bool *fbvec = e->r->firstbytes.vec;
+			while (cp != ep && !fbvec[(unsigned char) *cp])
+				++cp;
+			if (cp == ep)
+				goto exit;
+		}
+		if (cp != e->wconv.cp) {
+			if (e->r->enc == UTF8) {
+				const char *bp = cp;
+				while (bp != e->wconv.cp && cp - bp < 8 && (unsigned char) *--bp >= 0x80)
+					;
+				e->wconv.cp = (unsigned char) *bp >= 0x80 ? cp - 1 : bp;
+			} else {
+				e->wconv.cp = cp - 1;
+			}
+			wcnext = wconv_nextchr(&e->wconv);
+		}
+		WCNEXT(e, wcnext);
+	}
+	nosub_execute_add(e, &mcsvs[0], 0, wcnext);
+	if (!qset_empty(e->epsq))
+		nosub_execute_epsclosure(e, &mcsvs[0], wcnext);
+	for (;;) {
+		if (wcnext == End)
+			break;
+		WCNEXT(e, wcnext);
+		while (!qset_empty(&mcsvs[0].qset))
+			nosub_execute_add(e, &mcsvs[1], qset_remove(&mcsvs[0].qset) + 1, wcnext);
+		if (!e->exiting)
+			nosub_execute_add(e, &mcsvs[1], 0, wcnext);
+		if (!qset_empty(e->epsq))
+			nosub_execute_epsclosure(e, &mcsvs[1], wcnext);
+		if (qset_empty(&mcsvs[1].qset)) {
+			if (e->exiting)
+				break;
+			if ((e->flags & MINRX_REG_NOFIRSTBYTES) == 0 && e->r->firstvalid)
+				goto zoom;
+		}
+		if (wcnext == End)
+			break;
+		WCNEXT(e, wcnext);
+		while (!qset_empty(&mcsvs[1].qset))
+			nosub_execute_add(e, &mcsvs[0], qset_remove(&mcsvs[1].qset) + 1, wcnext);
+		if (!e->exiting)
+			nosub_execute_add(e, &mcsvs[0], 0, wcnext);
+		if (!qset_empty(e->epsq))
+			nosub_execute_epsclosure(e, &mcsvs[0], wcnext);
+		if (qset_empty(&mcsvs[0].qset)) {
+			if (e->exiting)
+				break;
+			if ((e->flags & MINRX_REG_NOFIRSTBYTES) == 0 && e->r->firstvalid)
+				goto zoom;
+		}
+	}
+ exit:
+	qset_clear(e->epsq);
+	qset_clear(&e->epsv->qset);
+	qset_clear(&mcsvs[0].qset);
+	qset_clear(&mcsvs[1].qset);
+	return e->matched ? MINRX_REG_SUCCESS : MINRX_REG_NOMATCH;
+}
+
 int
 minrx_regcomp(minrx_regex_t *rx, const char *s, int flags)
 {
@@ -2618,7 +2802,7 @@ minrx_regnexec(minrx_regex_t *rx, size_t ns, const char *s, size_t nm, minrx_reg
 	Execute e;
 	if (!execute_construct(&e, r, (minrx_regexec_flags_t) flags, s, s + ns))
 		return MINRX_REG_ESPACE;
-	int ret = execute(&e, nm, rm);
+	int ret = ((rx->re_compflags & MINRX_REG_NOSUB) == 0 && nm != 0) ? execute(&e, nm, rm) : nosub_execute(&e);
 	execute_destruct(&e, ret == MINRX_REG_SUCCESS || ret == MINRX_REG_NOMATCH);
 	return ret;
 }

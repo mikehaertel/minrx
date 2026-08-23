@@ -157,19 +157,20 @@ set_syntax_flags(void)
 {
 	if (use_minrx) {
 		minrx_syntax_flags = MINRX_REG_EXTENDED	// default is EREs
-			| MINRX_REG_NOSUB		// don't need submatch info
 			| MINRX_REG_NEWLINE		// \n isn't matched
 			| MINRX_REG_BRACE_COMPAT	// { not followed by digit isn't special
 			| MINRX_REG_EXTENSIONS_BSD	// \< and \>
 			| MINRX_REG_EXTENSIONS_GNU	// \b \B \s \S \w \W
 			| MINRX_REG_NATIVE1B;		// All bytes are valid in a single byte locale
-
+		if (!wholelines)
+			minrx_syntax_flags |= MINRX_REG_NOSUB;	// don't need submatch info
 		if (ignorecase)
 			minrx_syntax_flags |= MINRX_REG_ICASE;	// Ignore case (duh)
 	} else {
 		syntax_flags = REG_EXTENDED
-			| REG_NOSUB
 			| REG_NEWLINE;
+		if (!wholelines)
+			syntax_flags |= REG_NOSUB;	// don't need submatch info
 		if (ignorecase)
 			syntax_flags |= REG_ICASE;
 	}

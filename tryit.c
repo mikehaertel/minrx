@@ -69,6 +69,10 @@ main(int argc, char *argv[])
 					printf("(?,?)");
 			putchar('\n');
 		}
+		if (minrx_regexec(&rx, argv[2], 0, NULL, eflags) != 0) {
+			fprintf(stderr, "nosub mismatch!\n");
+			exit(EXIT_FAILURE);
+		}
 		lasteo = rm[0].rm_eo;
 		if ((eflags & MINRX_REG_RESUME) == 0 || argv[2][rm[0].rm_eo] == '\0')
 			break;
