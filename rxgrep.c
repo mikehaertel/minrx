@@ -170,7 +170,7 @@ set_syntax_flags(void)
 		syntax_flags = REG_EXTENDED
 			| REG_NEWLINE;
 		if (!wholelines)
-			minrx_syntax_flags |= MINRX_REG_NOSUB;	// don't need submatch info
+			syntax_flags |= REG_NOSUB;	// don't need submatch info
 		if (ignorecase)
 			syntax_flags |= REG_ICASE;
 	}

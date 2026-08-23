@@ -70,7 +70,7 @@ main(int argc, char *argv[])
 			putchar('\n');
 		}
 		if (minrx_regexec(&rx, argv[2], 0, NULL, eflags) != 0) {
-			printf("nosub mismatch!\n");
+			fprintf(stderr, "nosub mismatch!\n");
 			exit(EXIT_FAILURE);
 		}
 		lasteo = rm[0].rm_eo;
