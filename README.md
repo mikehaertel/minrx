@@ -56,6 +56,8 @@ unlikely to be broadly useful.
 
 A detailed description of MinRX's algorithm can be found in [ALGORITHM.txt](ALGORITHM.txt).
 
+MinRX usage from C is described in the man page [minrx.3](minrx.3).
+
 ## Features
 
 MinRX is a nearly-feature-complete implementation of POSIX 2024 EREs,
@@ -101,8 +103,8 @@ source directory. You only need to compile `minrx.c`; `charset.c` is
 compiled into `minrx.o` via `#include "charset.c"`.
 
 If your program is multithreaded, you must make sure that your
-configuration mechanism defines the symbol `HAVE_PTHREADS` since one
-of the routines in the `charset` library makes use of a mutex.  In a
+configuration mechanism defines the symbol `HAVE_PTHREADS` since routines
+in `minrx.c` and in `charset.c` make use of mutexes.  In a
 single-threaded program this is not necessary.
 
 `minrx.c` does a `#include "config.h"` if `HAVE_CONFIG_H` is defined, so you
@@ -121,7 +123,7 @@ available options.
 
 Do *not* have high expectations for `rxgrep` performance. The code
 was written with simplicity and correctness in mind, not speed, and
-the MinRX matcher itself is currently slow.
+the MinRX matcher itself is not yet as fast as some other matchers.
 
 ## Future plans
 
@@ -139,6 +141,8 @@ Currently planned work:
   to any deterministic *finite* automaton, but it is equivalent to a
   "deterministic *infinite* automaton", and it might be feasible to cache
   a useful working subset of this infinite automaton's states.
+
+See the man page for options that may cause faster execution during matching.
 
 ## License
 

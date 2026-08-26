@@ -1,4 +1,4 @@
-.TH MINRX 3 "April 2025"
+.TH MINRX 3 "August 2026"
 .SH NAME
 minrx \- A minimal POSIX-compliant matcher for extended regular expressions
 .SH SYNOPSIS
@@ -63,8 +63,8 @@ should be bitwise-OR'ed together. They are:
 .RS
 .TP
 \f(CWMINRX_REG_EXTENDED\fP
-Required in current version of
-.IR minrx .
+Required in the current version of
+.IR MinRX .
 .TP
 \f(CWMINRX_REG_ICASE\fP
 Ignore case in pattern and search.
@@ -94,7 +94,7 @@ Enable BSD extensions \f(CW\e<\fP and \f(CW\e>\fP.
 Enable GNU extensions \f(CW\eb \eB \es \eS \ew \eW\fP.
 .TP
 \f(CWMINRX_REG_NATIVE1B\fP
-Use native encoding for 1-byte character sets (including the "C" locale and
+Use native encoding for 1-byte character sets (including the \f(CW"C"\fP locale and
 any locale in which \f(CWMB_CUR_MAX == 1\fP).
 .IP
 This affects the interpretation of ranges in bracket expressions
@@ -103,7 +103,7 @@ This improves compatibility with historical matchers, but may result in
 (more-)surprising behavior if the \f(CWLC_CTYPE\fP locale is changed
 between compilation and execution.
 .IP
-This will produce sensible results only in \f(CWLC_CTYPE\fP locales
+This produces sensible results only in \f(CWLC_CTYPE\fP locales
 that have the same encodings as ASCII/ISO8859 for the regular expression
 special characters.
 .TP
@@ -183,6 +183,7 @@ The use of \f(CWrm\fP for submatches is explained below.
 Execute the compiled regular expression \f(CWre\fP against the text
 in \f(CWstring\fP of length \f(CWnstring\fP.
 Here too, in this case, \f(CWstring\fP is not necessarily zero-terminated.
+This function is also an extension over POSIX.
 .PP
 When executing the compiled regular expression, you can pass in the
 bitwise-OR of the following flags:
@@ -280,6 +281,14 @@ have the offsets for the first subexpression, \f(CWrm[2]\fP
 the offsets for the second subexpression, and so on.
 Note that \f(CWrm_eo\fP will be one past the last character of the matching
 text, due to C's zero-based array indexing.
+.PP
+Similar to using \f(CWMINRX_REG_NOSUB\fP when compiling a
+regular expression, setting \f(CWnrm\fP to zero can be used
+to obtain just a Yes/No result; this may also execute faster.
+.PP
+It is enough to use either \f(CWMINRX_REG_NOSUB\fP or
+setting \f(CWnrm\fP to zero to obtain the Yes/No result
+and faster execution; it is not necessary to use both.
 .SS Error Messages
 The error codes described earlier may be translated into printable
 strings (say, for error messages) using the \f(CWminrx_regerror()\fP
@@ -297,7 +306,7 @@ Michael J. Haertel, \f(CWmike@ducky.net\fP.
 .PP
 This manual page was written by Arnold Robbins, \f(CWarnold@skeeve.com\fP.
 .SH COPYRIGHT FOR THIS MANUAL PAGE
-Copyright 2024, 2025, Arnold David Robbins.
+Copyright 2024, 2025, 2026, Arnold David Robbins.
 .PP
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions
