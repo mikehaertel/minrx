@@ -155,7 +155,7 @@ under its own license, the text of which can be found in that file.
 
 Arnold Robbins pestered me for years to write this matcher, and enthusiastically
 tested numerous early versions of it with GNU `awk`.
-He contributed the charset library, the manual page and the `rxgrep` program.
+He contributed the `charset` library, the manual page and the `rxgrep` program.
 
 The `meson` build was contributed by shenleban tongying.
 
