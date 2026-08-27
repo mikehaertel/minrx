@@ -282,13 +282,9 @@ the offsets for the second subexpression, and so on.
 Note that \f(CWrm_eo\fP will be one past the last character of the matching
 text, due to C's zero-based array indexing.
 .PP
-Similar to using \f(CWMINRX_REG_NOSUB\fP when compiling a
-regular expression, setting \f(CWnrm\fP to zero can be used
-to obtain just a Yes/No result; this may also execute faster.
-.PP
-It is enough to use either \f(CWMINRX_REG_NOSUB\fP or
-setting \f(CWnrm\fP to zero to obtain the Yes/No result
-and faster execution; it is not necessary to use both.
+In most cases, executing with \f(CWnrm\fP equal to zero (to obtain just
+a Yes/No result) may afford nearly the same speedup as compiling with
+\f(CWMINRX_REG_NOSUB\fP.
 .SS Error Messages
 The error codes described earlier may be translated into printable
 strings (say, for error messages) using the \f(CWminrx_regerror()\fP
